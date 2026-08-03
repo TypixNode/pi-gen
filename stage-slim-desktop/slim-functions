@@ -1,0 +1,27 @@
+# shellcheck shell=bash
+# Helpers shared by this stage's sub-stages, sourced as "${STAGE_DIR}/slim-functions".
+
+# strip_docs <rootfs> <locale language>
+#
+# Removes what /etc/dpkg/dpkg.cfg.d/99-slim-nodoc keeps out of packages unpacked
+# from now on, for the packages that were unpacked before it was installed and
+# for anything a maintainer script recreated.
+strip_docs() {
+	local rootfs="$1" lang="$2"
+
+	# Directories that keep a copyright file cannot be removed, so files and
+	# symlinks are deleted first and only the emptied directories go after.
+	find "${rootfs}/usr/share/doc" -mindepth 1 ! -type d ! -name copyright -delete
+	find "${rootfs}/usr/share/doc" -mindepth 1 -depth -type d -empty -delete
+
+	local dir
+	for dir in man info groff lintian; do
+		if [ -d "${rootfs}/usr/share/${dir}" ]; then
+			find "${rootfs}/usr/share/${dir}" -mindepth 1 ! -type d -delete
+			find "${rootfs}/usr/share/${dir}" -mindepth 1 -depth -type d -empty -delete
+		fi
+	done
+
+	find "${rootfs}/usr/share/locale" -mindepth 1 -maxdepth 1 -type d \
+		! -name "${lang}*" -exec rm -rf {} +
+}
