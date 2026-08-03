@@ -233,6 +233,14 @@ The following environment variables are supported:
 
     If set to `1`, cloud-init and netplan will be installed and configured. This will allow you to configure your Raspberry Pi using cloud-init configuration files. The cloud-init configuration files should be placed in the bootfs or by editing the files in `stage2/04-cloud-init/files`. Cloud-init will be configured to read them on first boot.
 
+ * `BOOT_SIZE` (Default: `536870912`, i.e. 512MB)
+
+    Size of the boot partition in bytes. An image built with a single kernel flavour needs far less than the default.
+
+ * `ROOT_MARGIN_PERCENT` (Default: `20`) and `ROOT_MARGIN_FIXED` (Default: `209715200`, i.e. 200MB)
+
+    Free space to add to the root partition, as a percentage of the root filesystem contents plus a fixed number of bytes. The root filesystem is grown to fill the storage on first boot, so these only need to be large enough for the image itself to be usable; lowering them is how an image is made to fit on small storage.
+
 A simple example for building Raspberry Pi OS:
 
 ```bash
@@ -378,9 +386,10 @@ maintenance and allows for more easy customization.
    enhancements, etc.  This is a base desktop system, with some development
    tools installed.
 
- - **Stage 4** - Normal Raspberry Pi OS image. System meant to fit on a 4GB card.
-   This is the    stage that installs most things that make Raspberry Pi OS friendly
-   to new users - e.g. system documentation.
+ - **Stage 4** - Normal Raspberry Pi OS image. This is the stage that installs most
+   things that make Raspberry Pi OS friendly to new users - e.g. system
+   documentation. The resulting image no longer fits on a 4GB card; see
+   [Building for small storage](#building-for-small-storage).
 
  - **Stage 5** - The Raspberry Pi OS Full image. More development
    tools, an email client, learning tools like Scratch, specialized packages
@@ -406,6 +415,28 @@ sudo ./build.sh  # or ./build-docker.sh
 If you wish to build further configurations upon (for example) the lite
 system, you can also delete the contents of `./stage3` and `./stage4` and
 replace with your own contents in the same format.
+
+### Building for small storage
+
+The stage 4 desktop image has outgrown small storage: it is 6.5GB, and the
+Bookworm and Bullseye images before it were 6.2GB and 4.3GB, so none of them can
+be written to a 4GB eMMC module such as a Compute Module 3.
+
+`config-slim-desktop` builds a desktop image that fits, by replacing stages 3 to
+5 with `stage-slim-desktop`:
+
+```bash
+touch ./stage2/SKIP_IMAGES
+sudo ./build.sh -c config-slim-desktop
+```
+
+The `rpd-*` metapackages that stage 3 and stage 4 install carry no `Depends`,
+only `Recommends`, so the desktop can be assembled from the packages behind them
+one at a time. `stage-slim-desktop` first trims the Lite rootfs - the Wi-Fi blobs
+for chipsets no Raspberry Pi has, the BCM2712 kernel, the kernel headers and
+their cross-toolchain, cloud-init, documentation and non-default translations -
+and then installs a single desktop session, the theme, the control panels, one
+browser and the everyday utilities. The knobs are documented in the config file.
 
 
 ## Skipping stages to speed up development
