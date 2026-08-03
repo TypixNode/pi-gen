@@ -21,9 +21,12 @@ STAGE_LIST="stage0 stage1 stage2 stage-slim-desktop"
 BOOT_SIZE=$((256 * 1024 * 1024))
 
 # The root filesystem grows to fill the storage on first boot, so the image only
-# needs enough slack to be a valid filesystem rather than 20% + 200MB of it.
-ROOT_MARGIN_PERCENT=8
-ROOT_MARGIN_FIXED=$((120 * 1024 * 1024))
+# needs enough slack to hold the rootfs and let export-image run apt in it.
+# ROOT_SIZE is measured with du --apparent-size, which undercounts a 4K-block
+# ext4 by ~7% on a rootfs of this shape, and the filesystem's own metadata costs
+# another few percent on top of that.
+ROOT_MARGIN_PERCENT=12
+ROOT_MARGIN_FIXED=$((200 * 1024 * 1024))
 
 # cloud-init and netplan are ~110MB of rootfs for a machine that is configured
 # from the desktop.
@@ -54,6 +57,12 @@ export SLIM_APT_TRIM=1
 # and Raspberry Pi with onboard wireless; the other blobs are 220MB between
 # them. Set to an empty string on a module without wireless.
 export SLIM_KEEP_FIRMWARE="firmware-brcm80211"
+
+# The kernel flavour to keep. rpi-v8 boots BCM2837 (Compute Module 3, Pi 3) and
+# BCM2711 (Compute Module 4, Pi 4); rpi-2712 is Raspberry Pi 5 only. Dropping the
+# other flavour and all the kernel headers is ~245MB, most of it the
+# cross-toolchain the headers pull in.
+export SLIM_KEEP_KERNEL=rpi-v8
 
 # Anything extra you want in the image, installed with --no-install-recommends
 # together with the desktop. Some sizes worth knowing about:
