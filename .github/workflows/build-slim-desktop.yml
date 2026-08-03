@@ -57,7 +57,7 @@ on:
     branches:
       - 'cursor/**'
     paths:
-      - 'stage-slim-desktop/**'
+      - 'slim-desktop-stage/**'
       - 'config-slim-desktop'
       - 'export-image/**'
       - 'scripts/**'
