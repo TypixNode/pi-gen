@@ -15,10 +15,12 @@ if [ "${SLIM_STRIP_DOCS:-1}" = "1" ]; then
 	strip_docs "${ROOTFS_DIR}" "${LOCALE_LANG}"
 fi
 
-# apt keeps its package indices uncompressed and builds two binary caches from
-# them; on a Debian + Raspberry Pi archive set that is several hundred MB of
-# regenerable data. These settings survive the `apt-get update` that
-# export-image runs, so they have to be configuration rather than a plain rm.
+# apt keeps its package indices uncompressed (56MB for Debian main alone) and
+# builds two identically sized binary caches from them, ~145MB of regenerable
+# data in total. Storing the indices compressed and dropping the source cache
+# reclaims about 85MB of that; the binary cache is kept because apt would
+# otherwise reparse the indices on every invocation. export-image refreshes all
+# of it after this stage, so this has to be configuration rather than a plain rm.
 if [ "${SLIM_APT_TRIM:-1}" = "1" ]; then
 	install -m 644 files/99-slim-apt "${ROOTFS_DIR}/etc/apt/apt.conf.d/99-slim-apt"
 fi
