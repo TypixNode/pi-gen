@@ -110,18 +110,37 @@ jobs:
       - name: Report image size
         run: |
           sudo chown -R "$(id -u):$(id -g)" deploy
+          # The uncompressed size is what has to fit the storage, and it is what
+          # rpi-imager checks the target against.
+          written=0
+          for f in deploy/*.img.xz; do
+            [ -e "$f" ] || continue
+            written=$(xz --robot --list "$f" | awk '$1=="totals" {print $5}')
+          done
+          for f in deploy/*.img; do
+            [ -e "$f" ] && written=$(stat -c %s "$f")
+          done
           {
             echo '### Slim desktop image'
             echo
             echo '| File | Size |'
             echo '| --- | --- |'
             for f in deploy/*; do
-              printf '| `%s` | %s |\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+              printf '| `%s` | %s |\n' "$(basename "$f")" "$(numfmt --to=iec --suffix=B "$(stat -c %s "$f")")"
             done
             echo
-            echo "A 4GB eMMC module holds about 3.9 GB, so the uncompressed image"
-            echo "has to stay below that; the root filesystem grows to fill the"
-            echo "module on first boot."
+            if [ "$written" -gt 0 ]; then
+              printf 'Uncompressed image: **%s** (%s bytes)\n\n' \
+                "$(numfmt --to=si --suffix=B "$written")" "$written"
+              # 4GB eMMC modules report a little under 4 x 10^9 bytes.
+              if [ "$written" -le 3900000000 ]; then
+                echo 'Fits a 4GB eMMC module.'
+              else
+                echo ':warning: Too large for a 4GB eMMC module.'
+              fi
+              echo
+              echo 'The root filesystem grows to fill the storage on first boot.'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
           ls -l deploy
 
@@ -131,6 +150,7 @@ jobs:
           path: |
             deploy/*.img*
             deploy/*.zip
+            deploy/*.bmap
             deploy/*.info
           if-no-files-found: error
           compression-level: 0
