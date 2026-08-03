@@ -103,7 +103,8 @@ jobs:
           case "$BUILD_VARIANT" in
           slim-desktop)
             if [ ! -f config-slim-desktop ]; then
-              echo "config-slim-desktop is not in this ref; pick another variant" >&2
+              echo "config-slim-desktop is not present in the ref being built." >&2
+              echo "Set this workflow's ref input to a branch that carries it." >&2
               exit 1
             fi
             touch stage2/SKIP_IMAGES
