@@ -67,6 +67,7 @@ jobs:
       SLIM_BROWSER: ${{ inputs.browser || 'chromium' }}
       SLIM_EXTRA_PACKAGES: ${{ inputs.extra_packages }}
       SLIM_KEEP_TOOLCHAIN: ${{ (github.event_name != 'workflow_dispatch' || inputs.keep_toolchain) && '1' || '0' }}
+      SLIM_RPI_CONNECT: '1'
       LOCALE_DEFAULT: ${{ inputs.locale || 'en_GB.UTF-8' }}
       TIMEZONE_DEFAULT: ${{ inputs.timezone || 'Europe/London' }}
       DEPLOY_COMPRESSION: ${{ inputs.compression || 'xz' }}
@@ -158,6 +159,26 @@ jobs:
                sudo test -e "/tmp/img/root/usr/share/xsessions/$SESSION.desktop" && echo 1 || echo 0)"
           check "boot partition carries a kernel and an initramfs" \
             "$(sudo test -e /tmp/img/boot/kernel8.img && sudo test -e /tmp/img/boot/initramfs8 && echo 1 || echo 0)"
+          # Raspberry Pi Imager's advanced options reach a Trixie image through
+          # cloud-init, and it can only rewrite the seed files if they are
+          # already on the boot partition.
+          check "cloud-init is installed for Imager's customisation" \
+            "$(sudo test -x /tmp/img/root/usr/bin/cloud-init && echo 1 || echo 0)"
+          # cloudinit-rpi means the Raspberry Pi config module plus the NoCloud
+          # datasource pointed at the boot partition, which is what lets Imager
+          # seed the image by dropping files there.
+          check "the Raspberry Pi cloud-init module is installed" \
+            "$(sudo test -e /tmp/img/root/usr/lib/python3/dist-packages/cloudinit/config/cc_raspberry_pi.py && echo 1 || echo 0)"
+          check "cloud-init reads its seed from the boot partition" \
+            "$(sudo grep -q 'seedfrom: file:///boot/firmware' /tmp/img/root/etc/cloud/cloud.cfg.d/99_raspberry-pi.cfg && echo 1 || echo 0)"
+          for seed in user-data meta-data network-config; do
+            check "boot partition carries $seed for Imager to write into" \
+              "$(sudo test -e "/tmp/img/boot/$seed" && echo 1 || echo 0)"
+          done
+          if [ "$SLIM_RPI_CONNECT" = '1' ]; then
+            check "rpi-connect is installed to back the rpi_connect capability" \
+              "$(sudo test -e /tmp/img/root/usr/bin/rpi-connect && echo 1 || echo 0)"
+          fi
           if [ "$SLIM_KEEP_TOOLCHAIN" = '1' ]; then
             KVER="$(sudo ls /tmp/img/root/usr/lib/modules | head -1)"
             check "kernel headers are usable for out-of-tree modules" \
@@ -181,36 +202,117 @@ jobs:
           sudo losetup -d "$LOOP"
           exit "$problems"
 
-      - name: List the artifacts
+      - name: Assemble the release
         run: |
           sudo chown -R "$(id -u):$(id -g)" deploy
-          {
-            echo '| File | Size |'
-            echo '| --- | --- |'
-            for f in deploy/*; do
-              printf '| `%s` | %s |\n' "$(basename "$f")" \
-                "$(numfmt --to=iec --suffix=B "$(stat -c %s "$f")")"
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
-          ls -l deploy
+          # Imager downloads the image straight from the URL in the OS list, so
+          # both the tag and the file name have to stay the same across builds.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG=slim-desktop-latest
+          fi
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: raspios-slim-desktop-arm64
-          path: |
-            deploy/*.img*
-            deploy/*.zip
-            deploy/*.bmap
-            deploy/*.info
-          if-no-files-found: error
-          compression-level: 0
+          ARCHIVE="$(ls deploy/image_*.img.xz deploy/image_*.img.gz deploy/image_*.zip \
+            deploy/*.img 2>/dev/null | head -1)"
+          case "$ARCHIVE" in
+            *.img.xz) EXT=img.xz ;;
+            *.img.gz) EXT=img.gz ;;
+            *.zip)    EXT=zip ;;
+            *)        EXT=img ;;
+          esac
+          ASSET="raspios-slim-desktop-arm64.$EXT"
 
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/slim-desktop-v')
+          mkdir -p release
+          cp "$ARCHIVE" "release/$ASSET"
+          for f in deploy/*.bmap; do
+            [ -e "$f" ] && cp "$f" release/raspios-slim-desktop-arm64.bmap
+          done
+          for f in deploy/*.info; do
+            [ -e "$f" ] && cp "$f" release/raspios-slim-desktop-arm64.info
+          done
+
+          ./scripts/make-os-list-json \
+            --image "$WORK_DIR"/export-image/*.img \
+            --archive "release/$ASSET" \
+            --url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/$ASSET" \
+            --release-date "$(date -u +%Y-%m-%d)" \
+            --devices pi4-64bit,pi3-64bit \
+            --capabilities "$([ "$SLIM_RPI_CONNECT" = 1 ] && echo rpi_connect || echo '')" \
+            --website "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --output release/os_list.json
+
+          ( cd release && sha256sum ./* > sha256sums.txt )
+          ls -l release
+          cat release/os_list.json
+
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "Raspberry Pi OS slim desktop ${GITHUB_REF_NAME}" \
-            --notes "arm64 desktop image trimmed to fit 4GB storage, built from \`config-slim-desktop\`." \
-            deploy/*
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            PRERELEASE=
+            TITLE="Raspberry Pi OS slim desktop $RELEASE_TAG"
+          else
+            PRERELEASE=--prerelease
+            TITLE="Raspberry Pi OS slim desktop (latest build)"
+          fi
+
+          IMAGER_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/os_list.json"
+          {
+            echo 'arm64 Raspberry Pi OS with the desktop, trimmed to fit 4GB storage'
+            echo '(Compute Module 3 and up), built from `config-slim-desktop`.'
+            echo
+            echo '## Raspberry Pi Imager'
+            echo
+            echo 'Point Imager at this build to get it in the OS picker with the'
+            echo 'advanced options working:'
+            echo
+            echo '```'
+            echo "rpi-imager --repo $IMAGER_URL"
+            echo '```'
+            echo
+            echo 'Hostname, username and password, SSH keys, Wi-Fi credentials,'
+            echo 'locale and Raspberry Pi Connect are applied through cloud-init,'
+            echo 'the same mechanism the stock Trixie images use'
+            echo '(`init_format: cloudinit-rpi`).'
+            echo
+            echo '## Files'
+            echo
+            echo '| File | Size |'
+            echo '| --- | --- |'
+            for f in release/*; do
+              printf '| `%s` | %s |\n' "$(basename "$f")" \
+                "$(numfmt --to=iec --suffix=B "$(stat -c %s "$f")")"
+            done
+          } > release-notes.md
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --title "$TITLE" --notes-file release-notes.md
+          else
+            gh release create "$RELEASE_TAG" $PRERELEASE \
+              --target "$GITHUB_SHA" --title "$TITLE" --notes-file release-notes.md
+          fi
+          gh release upload "$RELEASE_TAG" release/* --clobber
+
+          {
+            echo
+            echo "Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+            echo
+            echo 'Add to Raspberry Pi Imager:'
+            echo
+            echo '```'
+            echo "rpi-imager --repo $IMAGER_URL"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raspios-slim-desktop-arm64-metadata
+          path: |
+            release/os_list.json
+            release/sha256sums.txt
+            release/*.bmap
+            release/*.info
+          if-no-files-found: error
