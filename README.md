@@ -433,10 +433,17 @@ sudo ./build.sh -c config-slim-desktop
 The `rpd-*` metapackages that stage 3 and stage 4 install carry no `Depends`,
 only `Recommends`, so the desktop can be assembled from the packages behind them
 one at a time. `stage-slim-desktop` first trims the Lite rootfs - the Wi-Fi blobs
-for chipsets no Raspberry Pi has, the BCM2712 kernel, the kernel headers and
-their cross-toolchain, cloud-init, documentation and non-default translations -
-and then installs a single desktop session, the theme, the control panels, one
-browser and the everyday utilities. The knobs are documented in the config file.
+for chipsets the target does not have, the kernel flavour it cannot boot,
+cloud-init, armhf multiarch, documentation and non-default translations - and
+then installs a single desktop session, the theme, the control panels, one
+browser and the everyday utilities. `build-essential` and the headers for the
+kernel that stays are kept, so out-of-tree modules can still be built on the
+device; `SLIM_KEEP_TOOLCHAIN=0` reclaims those too. All the knobs are documented
+in `config-slim-desktop`.
+
+The `Build slim desktop image` GitHub Actions workflow builds the same image on a
+native arm64 runner and uploads it as an artifact; the session, the browser and
+the extra packages are workflow inputs.
 
 
 ## Skipping stages to speed up development
