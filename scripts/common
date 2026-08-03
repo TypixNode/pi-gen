@@ -125,6 +125,9 @@ ensure_loopdev_partitions() {
 	local line
 	local partition
 	local majmin
+	# Some kernels do not act on losetup --partscan at attach time, which leaves
+	# the loop device with no partitions to make nodes for.
+	partprobe "$1" || true
 	lsblk -r -n -o "NAME,MAJ:MIN" "$1" | grep -v "^${1#/dev/} " | while read -r line; do
 		partition="${line%% *}"
 		majmin="${line#* }"
