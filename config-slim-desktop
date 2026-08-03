@@ -77,11 +77,14 @@ export SLIM_KEEP_KERNEL="${SLIM_KEEP_KERNEL:-rpi-v8}"
 export SLIM_KEEP_TOOLCHAIN="${SLIM_KEEP_TOOLCHAIN:-1}"
 
 # Anything extra you want in the image, installed with --no-install-recommends
-# together with the desktop. Some sizes worth knowing about:
-#   fonts-noto-cjk       ~65MB   Chinese/Japanese/Korean rendering
-#   vlc                  ~110MB  media player
-#   thonny python3-picamera2  ~90MB   the usual Python teaching tools
-#   build-essential      ~80MB   compiler toolchain
+# together with the desktop. Installed sizes worth knowing about:
+#   fonts-noto-cjk               89MB   Chinese/Japanese/Korean rendering
+#   fonts-wqy-microhei            5MB   a much smaller Chinese font
+#   vlc vlc-plugin-base          30MB   media player
+#   firefox                     280MB   second browser
+#   thonny python3-picamera2     30MB   the usual Python teaching tools
+#   realvnc-vnc-server           39MB   remote desktop
+#   rpi-imager                   39MB
 export SLIM_EXTRA_PACKAGES="${SLIM_EXTRA_PACKAGES-}"
 
 # The defaults for these live in stage-slim-desktop; override to reshape the
