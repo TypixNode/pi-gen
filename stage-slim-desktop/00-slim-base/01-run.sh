@@ -1,13 +1,9 @@
 #!/bin/bash -e
 
-# Wi-Fi/Bluetooth blobs for chipsets that no Compute Module carries, the second
-# kernel flavour (rpi-2712 only boots on BCM2712), the kernel headers with their
-# cross-toolchain, and tools that are one `apt install` away on the running
-# system.
+# Wi-Fi/Bluetooth blobs for chipsets that no Compute Module carries, cloud-init,
+# the compiler toolchain and tools that are one `apt install` away on the
+# running system.
 PURGE=(
-	linux-image-rpi-2712
-	linux-headers-rpi-v8
-	linux-headers-rpi-2712
 	build-essential
 	gdb
 	manpages-dev
@@ -33,17 +29,44 @@ if [ -n "${SLIM_PURGE_PACKAGES+set}" ]; then
 	read -r -a PURGE <<< "${SLIM_PURGE_PACKAGES}"
 fi
 
-# ${PURGE[*]} rather than a here-document of the array so that the list reaches
-# the chroot's `for` loop as a single line.
+# The kernel flavour to keep: rpi-v8 covers BCM2837/2711, rpi-2712 is Raspberry
+# Pi 5 only. Both are installed by stage0 along with their headers, which drag in
+# a whole cross-toolchain.
+KEEP_KERNEL="${SLIM_KEEP_KERNEL:-rpi-v8}"
+
+# apt refuses to autoremove installed linux-image and linux-headers packages
+# (APT::NeverAutoRemove in 01autoremove), so purging the metapackages leaves the
+# versioned packages, their modules and their build dependencies in place. They
+# have to be named, and only dpkg inside the image knows their versioned names.
+# ${PURGE[*]} rather than the array so the list reaches the chroot as one line.
 on_chroot <<- EOF
-	INSTALLED=""
+	installed() {
+		dpkg-query -W -f='\${Status}\n' "\$1" 2>/dev/null | grep -q "ok installed"
+	}
+
+	PURGE_LIST=""
 	for PKG in ${PURGE[*]}; do
-		if dpkg-query -W -f='\${Status}' "\$PKG" 2>/dev/null | grep -q "ok installed"; then
-			INSTALLED="\$INSTALLED \$PKG"
+		if installed "\$PKG"; then
+			PURGE_LIST="\$PURGE_LIST \$PKG"
 		fi
 	done
-	if [ -n "\$INSTALLED" ]; then
-		apt-get purge -y \$INSTALLED
+
+	for PKG in \$(dpkg-query -W -f='\${Package}\n' 'linux-headers-*' 2>/dev/null); do
+		if installed "\$PKG"; then
+			PURGE_LIST="\$PURGE_LIST \$PKG"
+		fi
+	done
+	for PKG in \$(dpkg-query -W -f='\${Package}\n' 'linux-image-*' 2>/dev/null); do
+		case "\$PKG" in
+			*${KEEP_KERNEL}) continue ;;
+		esac
+		if installed "\$PKG"; then
+			PURGE_LIST="\$PURGE_LIST \$PKG"
+		fi
+	done
+
+	if [ -n "\$PURGE_LIST" ]; then
+		apt-get purge -y \$PURGE_LIST
 	fi
 	apt-get autoremove --purge -y
 EOF
