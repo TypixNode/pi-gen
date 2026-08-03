@@ -21,6 +21,10 @@ on:
         description: Extra packages, space separated (e.g. "fonts-noto-cjk vlc")
         type: string
         default: ''
+      keep_toolchain:
+        description: Keep build-essential, gdb and the kernel headers (~250MB)
+        type: boolean
+        default: true
       locale:
         description: Default locale, also the translations kept in the image
         type: string
@@ -76,6 +80,7 @@ jobs:
           SLIM_DESKTOP_SESSION: ${{ inputs.session || 'wayland' }}
           SLIM_BROWSER: ${{ inputs.browser || 'chromium' }}
           SLIM_EXTRA_PACKAGES: ${{ inputs.extra_packages }}
+          SLIM_KEEP_TOOLCHAIN: ${{ (github.event_name != 'workflow_dispatch' || inputs.keep_toolchain) && '1' || '0' }}
           LOCALE_DEFAULT: ${{ inputs.locale || 'en_GB.UTF-8' }}
           TIMEZONE_DEFAULT: ${{ inputs.timezone || 'Europe/London' }}
           DEPLOY_COMPRESSION: ${{ inputs.compression || 'xz' }}
