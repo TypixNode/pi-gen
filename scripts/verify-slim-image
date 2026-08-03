@@ -1,0 +1,158 @@
+#!/bin/bash -e
+#
+# Check that a built image still has the properties config-slim-desktop and the
+# published OS list entry promise. Every check here corresponds to something that
+# has silently broken at some point: an image too large for the target storage, a
+# root filesystem with no room left for export-image to run apt in, a second
+# kernel flavour left behind, lightdm pointing at a session whose packages were
+# never installed, and the customisation mechanism Raspberry Pi Imager needs.
+#
+# Run as root, since it loop-mounts the image:
+#
+#   sudo ./scripts/verify-slim-image work/*/export-image/*.img
+#
+# Environment:
+#   TARGET_STORAGE_BYTES  storage the image has to fit (default 3.9e9, a 4GB eMMC)
+#   EXPECTED_SESSION      lightdm session to expect (default rpd-labwc)
+#   SLIM_KEEP_TOOLCHAIN   1 to require the compiler and kernel headers
+#   SLIM_RPI_CONNECT      1 to require rpi-connect
+#   REPORT_FILE           where to write key=value results for a caller
+
+IMG="$1"
+if [ -z "$IMG" ] || [ ! -f "$IMG" ]; then
+	echo "usage: $0 <image.img>" >&2
+	exit 2
+fi
+if [ "$(id -u)" != 0 ]; then
+	echo "$0 must run as root" >&2
+	exit 2
+fi
+
+TARGET_STORAGE_BYTES="${TARGET_STORAGE_BYTES:-3900000000}"
+EXPECTED_SESSION="${EXPECTED_SESSION:-rpd-labwc}"
+BOOT_PART_START=$((8 * 1024 * 1024))
+
+MNT="$(mktemp -d)"
+LOOP=""
+# shellcheck disable=SC2317  # reached through the EXIT trap
+cleanup() {
+	umount "$MNT/boot" 2>/dev/null || true
+	umount "$MNT/root" 2>/dev/null || true
+	if [ -n "$LOOP" ]; then
+		losetup -d "$LOOP" 2>/dev/null || true
+	fi
+	rmdir "$MNT/boot" "$MNT/root" "$MNT" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+SIZE="$(stat -c %s "$IMG")"
+parted -s "$IMG" unit B print || true
+
+LOOP="$(losetup --show --find --partscan "$IMG")"
+# losetup --partscan does not make every kernel scan at attach time, and without
+# udev there is then nothing to create the partition nodes from.
+partprobe "$LOOP" || true
+for part in "${LOOP}p1" "${LOOP}p2"; do
+	if [ ! -b "$part" ]; then
+		majmin="$(lsblk -r -n -o "NAME,MAJ:MIN" "$LOOP" |
+			awk -v n="$(basename "$part")" '$1 == n {print $2}')"
+		[ -n "$majmin" ] && mknod "$part" b "${majmin%:*}" "${majmin#*:}"
+	fi
+done
+
+mkdir -p "$MNT/boot" "$MNT/root"
+mount -o ro "${LOOP}p2" "$MNT/root"
+# A build host without vfat in its kernel can still be asked about the boot
+# partition through mtools, which reads the filesystem in userspace.
+BOOT_MOUNTED=1
+if ! mount -o ro "${LOOP}p1" "$MNT/boot" 2>/dev/null; then
+	BOOT_MOUNTED=0
+	echo "note: cannot mount the boot partition, reading it with mtools instead"
+fi
+boot_has() {
+	if [ "$BOOT_MOUNTED" = 1 ]; then
+		test -e "$MNT/boot/$1"
+	else
+		MTOOLS_SKIP_CHECK=1 mdir -i "$IMG@@$BOOT_PART_START" "::/$1" >/dev/null 2>&1
+	fi
+}
+df -h "$MNT/root"
+
+AVAIL="$(df -B1 --output=avail "$MNT/root" | tail -1)"
+USED="$(df -B1 --output=used "$MNT/root" | tail -1)"
+PART_SIZE="$(blockdev --getsize64 "${LOOP}p2")"
+# Everything the filesystem will not offer a normal user: the data, its metadata,
+# and the 5% ext4 keeps back for root. Treating all of it as spoken for makes the
+# free space estimate a floor rather than a guess.
+FOOTPRINT=$((PART_SIZE - AVAIL))
+
+problems=0
+check() {
+	if [ "$2" = 0 ]; then
+		echo "FAIL: $1"
+		problems=$((problems + 1))
+	else
+		echo "ok: $1"
+	fi
+}
+yes_no() { if "$@" >/dev/null 2>&1; then echo 1; else echo 0; fi; }
+
+check "image is $SIZE bytes, target holds $TARGET_STORAGE_BYTES" \
+	"$([ "$SIZE" -le "$TARGET_STORAGE_BYTES" ] && echo 1 || echo 0)"
+check "root filesystem has $AVAIL bytes free for export-image to work in" \
+	"$([ "$AVAIL" -ge 33554432 ] && echo 1 || echo 0)"
+
+KERNELS="$(ls "$MNT/root/usr/lib/modules" | wc -l)"
+check "exactly one kernel flavour installed (found $KERNELS)" \
+	"$([ "$KERNELS" -eq 1 ] && echo 1 || echo 0)"
+KVER="$(ls "$MNT/root/usr/lib/modules" | head -1)"
+
+SESSION="$(sed -n 's/^user-session=//p' "$MNT/root/etc/lightdm/lightdm.conf")"
+check "lightdm session is $EXPECTED_SESSION (found ${SESSION:-none})" \
+	"$([ "$SESSION" = "$EXPECTED_SESSION" ] && echo 1 || echo 0)"
+# A session lightdm cannot find is the difference between a desktop and a black
+# screen, and only one of the two session stacks is installed.
+check "the ${SESSION:-none} session is actually installed" \
+	"$(if [ -e "$MNT/root/usr/share/wayland-sessions/$SESSION.desktop" ] ||
+	     [ -e "$MNT/root/usr/share/xsessions/$SESSION.desktop" ]; then echo 1; else echo 0; fi)"
+
+check "boot partition carries a kernel and an initramfs" \
+	"$(if boot_has kernel8.img && boot_has initramfs8; then echo 1; else echo 0; fi)"
+
+# Imager's advanced options reach a Trixie image through cloud-init with the
+# Raspberry Pi config module, and it can only seed the image by writing files the
+# boot partition already has.
+check "cloud-init is installed for Imager's customisation" \
+	"$(yes_no test -x "$MNT/root/usr/bin/cloud-init")"
+check "the Raspberry Pi cloud-init module is installed" \
+	"$(yes_no test -e "$MNT/root/usr/lib/python3/dist-packages/cloudinit/config/cc_raspberry_pi.py")"
+check "cloud-init reads its seed from the boot partition" \
+	"$(yes_no grep -q 'seedfrom: file:///boot/firmware' \
+		"$MNT/root/etc/cloud/cloud.cfg.d/99_raspberry-pi.cfg")"
+for seed in user-data meta-data network-config; do
+	check "boot partition carries $seed for Imager to write into" \
+		"$(yes_no boot_has "$seed")"
+done
+
+if [ "${SLIM_RPI_CONNECT:-1}" = 1 ]; then
+	check "rpi-connect is installed to back the rpi_connect capability" \
+		"$(yes_no test -e "$MNT/root/usr/bin/rpi-connect")"
+fi
+
+if [ "${SLIM_KEEP_TOOLCHAIN:-1}" = 1 ]; then
+	check "kernel headers are usable for out-of-tree modules" \
+		"$(yes_no test -e "$MNT/root/usr/lib/modules/$KVER/build/Makefile")"
+	check "a compiler is installed" "$(yes_no test -x "$MNT/root/usr/bin/gcc")"
+fi
+
+if [ -n "${REPORT_FILE:-}" ]; then
+	{
+		echo "IMAGE_SIZE=$SIZE"
+		echo "ROOT_USED=$USED"
+		echo "ROOT_AVAIL=$AVAIL"
+		echo "ROOT_FOOTPRINT=$FOOTPRINT"
+		echo "BOOT_PART_SIZE=$(blockdev --getsize64 "${LOOP}p1")"
+	} > "$REPORT_FILE"
+fi
+
+exit "$problems"
