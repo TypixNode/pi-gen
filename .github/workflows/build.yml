@@ -1,0 +1,52 @@
+name: Build stock pi-gen image
+
+# The images pi-gen builds without any custom stage: Lite, the desktop, and Full.
+# Whichever branch is built decides the release and the architecture - master is
+# 32-bit, arm64 is 64-bit - so this is also how a branch other than the one
+# holding the workflow gets built.
+#
+# The result is published as its own release and is not added to the OS list
+# Raspberry Pi Imager reads; "Append to OS list" does that when you ask for it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: Which image
+        type: choice
+        options: [lite, desktop, full]
+        default: lite
+      ref:
+        description: Branch, tag or SHA to build (blank = the one selected above)
+        type: string
+        default: ''
+      locale:
+        description: Default locale
+        type: string
+        default: en_GB.UTF-8
+      timezone:
+        description: Default timezone
+        type: string
+        default: Europe/London
+      compression:
+        description: Image compression
+        type: choice
+        options: [xz, zip, gz, none]
+        default: xz
+
+concurrency:
+  group: stock-${{ inputs.variant }}-${{ inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build-image.yml
+    with:
+      variant: ${{ inputs.variant }}
+      ref: ${{ inputs.ref }}
+      move_pointer: false
+      locale: ${{ inputs.locale }}
+      timezone: ${{ inputs.timezone }}
+      compression: ${{ inputs.compression }}

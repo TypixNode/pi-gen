@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""Write a Raspberry Pi Imager OS list for a locally built image.
+
+Imager reads this format from its default repository at
+https://downloads.raspberrypi.org/os_list_imagingutility_v4.json and can be
+pointed at another copy of it, which is how a self-built image gets into the
+device and OS pickers along with the advanced options.
+
+Two fields decide whether those advanced options do anything:
+
+  init_format  How Imager writes the hostname, user, password, SSH keys, Wi-Fi
+               credentials and locale into the image. `cloudinit-rpi` means
+               cloud-init with the Raspberry Pi configuration module, which is
+               what Raspberry Pi OS Trixie uses and what needs cloud-init,
+               rpi-cloud-init-mods and the user-data, meta-data and
+               network-config files present in the boot partition. `systemd` is
+               the older custom.toml path, which Trixie's raspberrypi-sys-mods
+               no longer implements. `none` disables customisation.
+
+  capabilities Extra options Imager offers. `rpi_connect` requires the
+               rpi-connect package in the image.
+
+The device tags come from the imager.devices list and gate which images Imager
+shows for the board the user picked, so they have to match what the image can
+actually boot: an image carrying only the rpi-v8 kernel runs on BCM2837 and
+BCM2711 (pi3-64bit, pi4-64bit) but not on a Raspberry Pi 5.
+"""
+import argparse
+import hashlib
+import json
+import os
+import subprocess
+import sys
+
+# Enough of the upstream device list for Imager's device picker to filter this
+# image correctly; the icons and descriptions are the upstream ones.
+DEVICES = [
+    {
+        "name": "Raspberry Pi 5",
+        "tags": ["pi5-64bit", "pi5-32bit"],
+        "default": False,
+        "icon": "https://downloads.raspberrypi.com/imager/icons/RPi_5.png",
+        "description": "Raspberry Pi 5, 500 / 500+, and Compute Module 5",
+        "matching_type": "exclusive",
+        "capabilities": [],
+    },
+    {
+        "name": "Raspberry Pi 4",
+        "tags": ["pi4-64bit", "pi4-32bit"],
+        "default": False,
+        "icon": "https://downloads.raspberrypi.com/imager/icons/RPi_4.png",
+        "description": "Raspberry Pi 4 Model B, 400, and Compute Module 4 / 4S",
+        "matching_type": "inclusive",
+        "capabilities": [],
+    },
+    {
+        "name": "Raspberry Pi 3",
+        "tags": ["pi3-64bit", "pi3-32bit"],
+        "default": True,
+        "icon": "https://downloads.raspberrypi.com/imager/icons/RPi_3.png",
+        "description": "Raspberry Pi 3 Model A+ / B / B+ and Compute Module 3 / 3+",
+        "matching_type": "inclusive",
+        "capabilities": [],
+    },
+    {
+        "name": "No filtering",
+        "tags": [],
+        "default": False,
+        "description": "Show every possible image",
+        "matching_type": "inclusive",
+        "capabilities": [],
+    },
+]
+
+
+DECOMPRESSORS = {
+    ".xz": ["xz", "-dc"],
+    ".gz": ["gzip", "-dc"],
+    ".zst": ["zstd", "-dc"],
+    ".zip": ["funzip"],
+}
+
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(4 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def measure_uncompressed(archive):
+    """(size, sha256) of what Imager will write, read by streaming the archive."""
+    _, ext = os.path.splitext(archive)
+    if ext not in DECOMPRESSORS:
+        return os.path.getsize(archive), sha256(archive)
+    proc = subprocess.Popen(DECOMPRESSORS[ext] + [archive], stdout=subprocess.PIPE)
+    digest, size = hashlib.sha256(), 0
+    for block in iter(lambda: proc.stdout.read(4 << 20), b""):
+        digest.update(block)
+        size += len(block)
+    proc.stdout.close()
+    if proc.wait() != 0:
+        raise SystemExit(f"failed to decompress {archive}")
+    return size, digest.hexdigest()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--image",
+                        help="the uncompressed .img, for extract_size/extract_sha256; "
+                             "measured by decompressing --archive when not given")
+    parser.add_argument("--archive", required=True,
+                        help="the compressed image Imager downloads")
+    parser.add_argument("--url", required=True, help="where --archive will be served from")
+    parser.add_argument("--name", default="Raspberry Pi OS slim desktop (64-bit)")
+    parser.add_argument("--description",
+                        default="Raspberry Pi OS with the desktop, trimmed to fit 4GB storage")
+    parser.add_argument("--icon",
+                        default="https://downloads.raspberrypi.com/raspios_armhf/"
+                                "Raspberry_Pi_OS_(32-bit).png")
+    parser.add_argument("--release-date", required=True, help="YYYY-MM-DD")
+    parser.add_argument("--init-format", default="cloudinit-rpi",
+                        choices=["cloudinit-rpi", "cloudinit", "systemd", "none"])
+    parser.add_argument("--devices", default="pi4-64bit,pi3-64bit")
+    parser.add_argument("--capabilities", default="rpi_connect",
+                        help="comma separated, empty string for none")
+    parser.add_argument("--website", default="")
+    parser.add_argument("--merge-into",
+                        help="an existing OS list to add this entry to; an entry "
+                             "with the same name is replaced rather than duplicated")
+    parser.add_argument("--output", default="-")
+    args = parser.parse_args()
+
+    if args.image:
+        extract_size, extract_sha256 = os.path.getsize(args.image), sha256(args.image)
+    else:
+        extract_size, extract_sha256 = measure_uncompressed(args.archive)
+
+    entry = {
+        "name": args.name,
+        "description": args.description,
+        "icon": args.icon,
+        "url": args.url,
+        "extract_size": extract_size,
+        "extract_sha256": extract_sha256,
+        "image_download_size": os.path.getsize(args.archive),
+        "image_download_sha256": sha256(args.archive),
+        "release_date": args.release_date,
+        "init_format": args.init_format,
+        "devices": [d for d in args.devices.split(",") if d],
+        "capabilities": [c for c in args.capabilities.split(",") if c],
+    }
+    if args.website:
+        entry["website"] = args.website
+
+    document = {"imager": {"devices": DEVICES}, "os_list": []}
+    if args.merge_into and os.path.exists(args.merge_into):
+        with open(args.merge_into) as fh:
+            document = json.load(fh)
+        document.setdefault("imager", {"devices": DEVICES})
+        document.setdefault("os_list", [])
+    document["os_list"] = [e for e in document["os_list"]
+                           if e.get("name") != entry["name"]] + [entry]
+
+    text = json.dumps(document, indent=2) + "\n"
+    if args.output == "-":
+        sys.stdout.write(text)
+    else:
+        with open(args.output, "w") as fh:
+            fh.write(text)
+
+
+if __name__ == "__main__":
+    main()

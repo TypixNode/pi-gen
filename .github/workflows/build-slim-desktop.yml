@@ -1,0 +1,83 @@
+name: Build slim desktop image
+
+# The desktop image config-slim-desktop trims to fit 4GB storage, such as a
+# Compute Module 3's eMMC.
+#
+# A push builds it and moves the published OS list onto the result. A manual run
+# publishes its build release and leaves the OS list alone; add it to the list
+# with the "Append to OS list" workflow when you want Imager to offer it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to build (blank = the one selected above)
+        type: string
+        default: ''
+      session:
+        description: Desktop session
+        type: choice
+        options: [wayland, x11, both]
+        default: wayland
+      browser:
+        description: Browser (chromium ~360MB, firefox ~280MB, none)
+        type: choice
+        options: [chromium, firefox, none]
+        default: chromium
+      extra_packages:
+        description: Extra packages, space separated (e.g. "fonts-noto-cjk vlc")
+        type: string
+        default: ''
+      keep_toolchain:
+        description: Keep build-essential, gdb and the kernel headers (~250MB)
+        type: boolean
+        default: true
+      locale:
+        description: Default locale, also the translations kept in the image
+        type: string
+        default: en_GB.UTF-8
+      timezone:
+        description: Default timezone
+        type: string
+        default: Europe/London
+      compression:
+        description: Image compression
+        type: choice
+        options: [xz, zip, gz, none]
+        default: xz
+  push:
+    tags:
+      - 'slim-desktop-v*'
+    branches:
+      - 'cursor/**'
+    paths:
+      - 'slim-desktop-stage/**'
+      - 'config-slim-desktop'
+      - 'export-image/**'
+      - 'scripts/**'
+      - 'build.sh'
+      - '.github/workflows/build-image.yml'
+      - '.github/workflows/build-slim-desktop.yml'
+
+# A build takes minutes; only the newest commit on a branch is worth one.
+concurrency:
+  group: slim-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build-image.yml
+    with:
+      variant: slim-desktop
+      ref: ${{ inputs.ref || '' }}
+      # Only an automatic build keeps the published OS list current.
+      move_pointer: ${{ github.event_name == 'push' }}
+      session: ${{ inputs.session || 'wayland' }}
+      browser: ${{ inputs.browser || 'chromium' }}
+      extra_packages: ${{ inputs.extra_packages || '' }}
+      keep_toolchain: ${{ github.event_name != 'workflow_dispatch' || inputs.keep_toolchain }}
+      locale: ${{ inputs.locale || 'en_GB.UTF-8' }}
+      timezone: ${{ inputs.timezone || 'Europe/London' }}
+      compression: ${{ inputs.compression || 'xz' }}
