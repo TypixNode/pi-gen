@@ -1,5 +1,8 @@
 #!/bin/bash -e
 
+# shellcheck source=../slim-functions
+source "${STAGE_DIR}/slim-functions"
+
 # Documentation, manual pages and translation catalogues are dropped at unpack
 # time so that the desktop packages installed by the later sub-stages never
 # write them in the first place.
@@ -9,12 +12,7 @@ if [ "${SLIM_STRIP_DOCS:-1}" = "1" ]; then
 	printf 'path-include /usr/share/locale/%s*\n' "${LOCALE_LANG}" \
 		>> "${ROOTFS_DIR}/etc/dpkg/dpkg.cfg.d/99-slim-nodoc"
 
-	find "${ROOTFS_DIR}/usr/share/doc" -mindepth 1 -not -name copyright -delete
-	find "${ROOTFS_DIR}/usr/share/man" "${ROOTFS_DIR}/usr/share/info" \
-		"${ROOTFS_DIR}/usr/share/groff" "${ROOTFS_DIR}/usr/share/lintian" \
-		-mindepth 1 -delete 2>/dev/null || true
-	find "${ROOTFS_DIR}/usr/share/locale" -mindepth 1 -maxdepth 1 -type d \
-		-not -name "${LOCALE_LANG}*" -exec rm -rf {} +
+	strip_docs "${ROOTFS_DIR}" "${LOCALE_LANG}"
 fi
 
 # apt keeps its package indices uncompressed and builds two binary caches from

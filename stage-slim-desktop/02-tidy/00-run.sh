@@ -1,16 +1,15 @@
 #!/bin/bash -e
 
+# shellcheck source=../slim-functions
+source "${STAGE_DIR}/slim-functions"
+
 on_chroot <<- \EOF
 	apt-get autoremove --purge -y
 	apt-get clean
 EOF
 
 if [ "${SLIM_STRIP_DOCS:-1}" = "1" ]; then
-	# Packages that were already unpacked before the dpkg path-exclude rules
-	# landed, plus anything that recreated these paths from a maintainer script.
-	find "${ROOTFS_DIR}/usr/share/doc" -mindepth 1 -not -name copyright -delete
-	find "${ROOTFS_DIR}/usr/share/locale" -mindepth 1 -maxdepth 1 -type d \
-		-not -name "${LOCALE_DEFAULT%%_*}*" -exec rm -rf {} +
+	strip_docs "${ROOTFS_DIR}" "${LOCALE_DEFAULT%%_*}"
 fi
 
 rm -rf "${ROOTFS_DIR}"/var/cache/apt/*.bin
