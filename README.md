@@ -441,11 +441,33 @@ kernel that stays are kept, so out-of-tree modules can still be built on the
 device; `SLIM_KEEP_TOOLCHAIN=0` reclaims those too. All the knobs are documented
 in `config-slim-desktop`.
 
-The `Build slim desktop image` GitHub Actions workflow builds the same image on a
-native arm64 runner; the session, the browser and the extra packages are workflow
-inputs. Each build gets its own release, whose image asset is never replaced, and
-the `slim-desktop-latest` release carries only an `os_list.json` pointing at the
-newest one. Raspberry Pi Imager can be pointed at either:
+`scripts/verify-slim-image` checks a built image against what this configuration
+and its published OS list entry promise, and is what the build runs before
+publishing:
+
+```bash
+sudo ./scripts/verify-slim-image work/*/export-image/*.img
+```
+
+### GitHub Actions
+
+The `Build image` workflow builds on a native arm64 runner, so no qemu is
+involved. Run it by hand to choose:
+
+ * `variant` - `slim-desktop`, or the stock `lite`, `desktop` and `full` builds
+ * `ref` - any branch, tag or SHA to build, using the workflow definition from
+   wherever it was dispatched
+ * the session, the browser, the extra packages, the toolchain, the locale, the
+   timezone and the compression
+
+A push builds `slim-desktop` and moves the published OS list onto it. A manual run
+publishes its build release and leaves the OS list alone; `Append to OS list` adds
+an image to it deliberately, taking the release tag and the entry's metadata and
+measuring the sizes and checksums from the asset being served.
+
+Each build gets its own release, whose image asset is never replaced, and the
+`slim-desktop-latest` release carries only an `os_list.json` pointing at one of
+them. Raspberry Pi Imager can be pointed at either:
 
 ```bash
 # follow the newest build
