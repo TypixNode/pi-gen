@@ -1,9 +1,9 @@
 #!/bin/bash -e
 
 case "${SLIM_DESKTOP_SESSION:-wayland}" in
-	wayland) SESSION_PACKAGES="rpd-wayland-core" ;;
-	x11)     SESSION_PACKAGES="rpd-x-core" ;;
-	both)    SESSION_PACKAGES="rpd-wayland-core rpd-x-core" ;;
+	wayland) SESSION_PACKAGES="rpd-wayland-core"; SESSION_OPTION=W2 ;;
+	x11)     SESSION_PACKAGES="rpd-x-core"; SESSION_OPTION=W1 ;;
+	both)    SESSION_PACKAGES="rpd-wayland-core rpd-x-core"; SESSION_OPTION=W2 ;;
 	*)
 		echo "Invalid SLIM_DESKTOP_SESSION: ${SLIM_DESKTOP_SESSION}" >&2
 		exit 1
@@ -34,6 +34,14 @@ on_chroot <<- EOF
 	apt-get -o Acquire::Retries=3 install --no-install-recommends -y \
 		${SESSION_PACKAGES} ${THEME_PACKAGES} ${PREFS_PACKAGES} \
 		${BROWSER_PACKAGES} ${APP_PACKAGES} ${SLIM_EXTRA_PACKAGES}
+EOF
+
+# rpd-common's postinst pins lightdm to the X11 session and rpd-wayland-core's
+# pins it to labwc, so with both installed the winner depends on the order dpkg
+# configures them in - and with only one installed the other one's choice would
+# leave lightdm pointing at a session that is not there. Pin it explicitly.
+on_chroot <<- EOF
+	raspi-config nonint do_wayland ${SESSION_OPTION}
 EOF
 
 # The shipped default points at a wallpaper from rpd-wallpaper-trixie. When that

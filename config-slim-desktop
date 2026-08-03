@@ -33,8 +33,9 @@ ENABLE_CLOUD_INIT=0
 # These are read by the stage's scripts, which run as child processes, so they
 # have to be exported.
 
-# wayland (labwc, the Trixie default), x11 (openbox + lxpanel) or both.
-# Installing only one saves ~85MB.
+# wayland (labwc, what the stock Trixie image boots into), x11 (openbox +
+# lxpanel) or both. Installing only one saves ~85MB. x11 is the fallback if
+# labwc misbehaves on the older VideoCore IV GPUs.
 export SLIM_DESKTOP_SESSION=wayland
 
 # chromium, firefox or none. Either browser is by far the largest single item in
