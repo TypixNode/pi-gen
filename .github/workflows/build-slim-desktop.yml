@@ -41,6 +41,20 @@ on:
   push:
     tags:
       - 'slim-desktop-v*'
+    branches:
+      - 'cursor/**'
+    paths:
+      - 'stage-slim-desktop/**'
+      - 'config-slim-desktop'
+      - 'export-image/**'
+      - 'scripts/**'
+      - 'build.sh'
+      - '.github/workflows/build-slim-desktop.yml'
+
+# A build takes tens of minutes; only the newest commit on a branch is worth one.
+concurrency:
+  group: slim-desktop-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -51,10 +65,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Show the runner
+        run: |
+          uname -a
+          nproc
+          free -h
+          df -h
+          dpkg --print-architecture
+
       - name: Reclaim runner disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /opt/hostedtoolcache /usr/local/share/boost || true
+            /usr/local/share/boost || true
           df -h
 
       - name: Install build dependencies
