@@ -50,13 +50,23 @@ parted -s "$IMG" unit B print || true
 
 LOOP="$(losetup --show --find --partscan "$IMG")"
 # losetup --partscan does not make every kernel scan at attach time, and without
-# udev there is then nothing to create the partition nodes from.
+# udev there is then nothing to create the partition nodes from either.
 partprobe "$LOOP" || true
+if command -v udevadm >/dev/null 2>&1; then
+	udevadm settle --timeout=10 || true
+fi
 for part in "${LOOP}p1" "${LOOP}p2"; do
 	if [ ! -b "$part" ]; then
 		majmin="$(lsblk -r -n -o "NAME,MAJ:MIN" "$LOOP" |
-			awk -v n="$(basename "$part")" '$1 == n {print $2}')"
-		[ -n "$majmin" ] && mknod "$part" b "${majmin%:*}" "${majmin#*:}"
+			awk -v n="${part#/dev/}" '$1 == n {print $2}')"
+		if [ -n "$majmin" ]; then
+			# udev may win the race, which is fine either way.
+			mknod "$part" b "${majmin%:*}" "${majmin#*:}" 2>/dev/null || true
+		fi
+	fi
+	if [ ! -b "$part" ]; then
+		echo "no device node appeared for $part" >&2
+		exit 2
 	fi
 done
 
