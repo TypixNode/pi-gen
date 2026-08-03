@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>树莓派深度解析：启动流程 · SoC 模块 · CM 与 eMMC 逐代差异 · 逆向 ISA/RTOS</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#161a23; --card:#1b2130; --text:#e6edf3; --muted:#9aa4b2;
+    --accent:#e2336b; --accent2:#6cc04a; --accent3:#39a0ed; --border:#2b3242;
+    --code:#0b0e14; --warn:#3a2f10; --warn-b:#8a6d1a; --ok:#12301a; --ok-b:#2f7d46;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;background:var(--bg);color:var(--text);line-height:1.7;}
+  header{background:linear-gradient(135deg,#7a0f2e,#c51a4a 55%,#e2336b);padding:44px 22px 36px;text-align:center;}
+  header h1{margin:0 0 8px;font-size:1.75em;}
+  header p{margin:0;opacity:.9;}
+  main{max-width:1080px;margin:0 auto;padding:28px 18px 72px;}
+  section{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:26px 30px;margin-bottom:26px;}
+  h2{margin-top:0;font-size:1.35em;color:#fff;border-left:5px solid var(--accent);padding-left:12px;}
+  h3{font-size:1.1em;color:var(--accent2);margin-top:1.6em;}
+  h4{color:var(--accent3);margin:1.2em 0 .3em;}
+  code{background:#0b0e14;color:#ffd6e3;padding:2px 6px;border-radius:5px;font-family:"SFMono-Regular",Consolas,Menlo,monospace;font-size:.88em;}
+  pre{background:var(--code);color:#e6edf3;padding:14px 18px;border-radius:10px;overflow-x:auto;font-size:.85em;border:1px solid var(--border);}
+  pre code{background:none;color:inherit;padding:0;}
+  a{color:var(--accent3);}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.9em;}
+  th,td{border:1px solid var(--border);padding:9px 12px;text-align:left;vertical-align:top;}
+  th{background:#242c3d;color:#fff;}
+  tr:nth-child(even) td{background:#1a2030;}
+  .muted{color:var(--muted);font-size:.88em;}
+  .callout{border-radius:10px;padding:13px 17px;margin:16px 0;border:1px solid;}
+  .callout.warn{background:var(--warn);border-color:var(--warn-b);}
+  .callout.ok{background:var(--ok);border-color:var(--ok-b);}
+  .callout .t{font-weight:700;display:block;margin-bottom:4px;}
+
+  /* ---- boot flow ---- */
+  .flow{display:flex;flex-direction:column;gap:0;margin:20px 0;}
+  .frow{display:flex;align-items:center;gap:12px;}
+  .fstep{flex:1;background:var(--card);border:1px solid var(--border);border-left:4px solid var(--accent3);border-radius:10px;padding:11px 15px;}
+  .fstep b{color:var(--accent3);}
+  .fstep small{color:var(--muted);}
+  .fdown{align-self:flex-start;margin-left:26px;color:var(--muted);font-size:1.4em;line-height:1;padding:2px 0;}
+  .fstep.gpu{border-left-color:var(--accent);} .fstep.gpu b{color:#ff6fa1;}
+  .fstep.arm{border-left-color:var(--accent2);} .fstep.arm b{color:var(--accent2);}
+
+  /* ---- SoC block diagram ---- */
+  .soc{border:2px solid var(--accent);border-radius:16px;padding:16px;margin:18px 0;background:#12151d;}
+  .soc-title{text-align:center;font-weight:700;color:#ff6fa1;letter-spacing:1px;margin-bottom:14px;}
+  .soc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}
+  .blk{border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);position:relative;}
+  .blk .tag{position:absolute;top:-9px;left:10px;font-size:.68em;font-weight:700;padding:1px 7px;border-radius:6px;color:#fff;}
+  .blk h5{margin:8px 0 6px;font-size:.95em;color:#fff;}
+  .blk p{margin:0;font-size:.8em;color:var(--muted);}
+  .blk.cpu{border-color:var(--accent2);} .blk.cpu .tag{background:var(--accent2);color:#08210f;}
+  .blk.gpu{border-color:var(--accent);} .blk.gpu .tag{background:var(--accent);}
+  .blk.io{border-color:var(--accent3);} .blk.io .tag{background:var(--accent3);color:#03233a;}
+  .blk.mem{border-color:#c9a227;} .blk.mem .tag{background:#c9a227;color:#241d00;}
+  .blk.span2{grid-column:span 2;}
+  .blk.span4{grid-column:span 4;}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:14px;font-size:.8em;color:var(--muted);}
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .dot{width:12px;height:12px;border-radius:3px;display:inline-block;}
+  .rainbow{display:flex;height:14px;border-radius:4px;overflow:hidden;margin-left:6px;width:90px;}
+  .rainbow div{flex:1;}
+  @media(max-width:820px){.soc-grid{grid-template-columns:repeat(2,1fr);}.blk.span2,.blk.span4{grid-column:span 2;}.frow{flex-direction:column;align-items:stretch;}}
+</style>
+</head>
+<body>
+<header>
+  <h1>树莓派深度解析</h1>
+  <p>完整启动加载流程 · SoC 内部模块框图 · Compute Module 与板载 eMMC 逐代差异 · 逆向出的 VideoCore ISA 与 ThreadX RTOS</p>
+</header>
+<main>
+
+<!-- ============ 0. 论坛/专业分析来源 ============ -->
+<section id="sources">
+  <h2>零、论坛与专业分析来源（有人系统研究过）</h2>
+  <p>这套"GPU 先启动"的流程确实被很多人专业拆解过，从社区问答到逆向工程项目都有。下面是可信度较高、可深入阅读的来源：</p>
+  <table>
+    <tr><th>类型</th><th>来源</th><th>价值</th></tr>
+    <tr><td>官方源码维基</td><td><a href="https://deepwiki.com/raspberrypi/firmware/2-boot-process">DeepWiki · raspberrypi/firmware Boot Process</a></td><td>逐阶段拆解官方固件仓库的启动流程</td></tr>
+    <tr><td>官方文档</td><td><a href="https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/compute-module/cm-peri-sw-guide.adoc">CM 外设软件指南</a> / <a href="https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/config_txt/boot.adoc">config.txt boot 文档</a></td><td>overlay 合并、dt-blob.bin、各机型内核名的权威说明</td></tr>
+    <tr><td>技术博客</td><td><a href="https://wiki.beyondlogic.org/index.php?title=Understanding_RaspberryPi_Boot_Process">BeyondLogic · Understanding RaspberryPi Boot Process</a></td><td>经典逐阶段图解，含 start.elf 向内核追加传参的实例</td></tr>
+    <tr><td>社区问答</td><td><a href="https://raspberrypi.stackexchange.com/questions/10489/how-does-raspberry-pi-boot">RPi StackExchange: How does Raspberry Pi boot?</a></td><td>官方工程师原话解释 ROM→bootcode.bin→loader.bin→start.elf 的演化</td></tr>
+    <tr><td>逆向工程</td><td><a href="https://github.com/hermanhermitage/videocoreiv/">Herman Hermitage · videocoreiv</a></td><td>社区逆向的 VideoCore IV ISA、寄存器映射、反汇编器、ThreadX 结论</td></tr>
+    <tr><td>技术讨论</td><td><a href="https://news.ycombinator.com/item?id=12743371">Hacker News: "真正的主处理器是 VideoCore IV，ARM 只是挂在旁边"</a></td><td>对 VPU ISA 特性（48 位指令、80 位向量 DSP 等）的第一手讨论</td></tr>
+    <tr><td>百科</td><td><a href="https://en.wikipedia.org/wiki/VideoCore">Wikipedia · VideoCore</a></td><td>2014 年 Broadcom 只开源了 3D 驱动、VPU 引导固件仍闭源的定性结论</td></tr>
+  </table>
+  <p class="muted">共识结论：官方从未公开 <code>start.elf</code>（VPU 引导固件）的源码；对它的理解全部来自逆向工程与专利研究。</p>
+</section>
+
+<!-- ============ 1. 启动流程可视化 ============ -->
+<section id="flow">
+  <h2>一、完整启动加载流程（可视化）</h2>
+  <p>核心反常识点：<b>上电时 ARM CPU 处于 reset（关闭）状态，是 GPU（VideoCore）先启动</b>，并作为启动信任根，一路把硬件初始化好、把内核加载进内存之后，才"放开"ARM 让它执行 Linux。</p>
+
+  <div class="flow">
+    <div class="frow"><div class="fstep gpu"><b>① BootROM（SoC 内固化）</b><br><small>GPU 执行；SDRAM 尚未启用。从启动介质寻找并把下一级载入 L2 cache</small></div></div>
+    <div class="fdown">▼</div>
+    <div class="frow"><div class="fstep gpu"><b>② 第二级引导</b><br><small>Pi 1/2/3：从 FAT 分区读 <code>bootcode.bin</code> 到 L2 cache，初始化 SDRAM &nbsp;|&nbsp; Pi 4/5：改为板载 <b>SPI EEPROM</b> 里的引导程序（可 USB/网络/NVMe 启动、可升级）</small></div></div>
+    <div class="fdown">▼</div>
+    <div class="frow"><div class="fstep gpu"><b>③ GPU 主固件 start.elf（+ fixup.dat）</b><br><small>读 <code>dt-blob.bin</code>（GPU 侧设备树：GPIO/时钟）→ 读 <code>config.txt</code> → 显示<span style="display:inline-flex;align-items:center;">彩虹自检图<span class="rainbow"><div style="background:#f00"></div><div style="background:#f90"></div><div style="background:#ff0"></div><div style="background:#0c0"></div><div style="background:#06f"></div><div style="background:#60c"></div></span></span> → 加载机型专属 ARM DTB 并<b>合并 overlay</b> → 划分 GPU/ARM 内存（fixup.dat 提供重定位信息）</small></div></div>
+    <div class="fdown">▼</div>
+    <div class="frow"><div class="fstep gpu"><b>④ 加载内核 + cmdline.txt</b><br><small>把 <code>kernel*.img</code>、<code>initramfs</code>、合并后的设备树放入 ARM 内存；可选执行 <code>armstub</code> 配置 CPU 状态</small></div></div>
+    <div class="fdown">▼</div>
+    <div class="frow"><div class="fstep arm"><b>⑤ 释放 ARM 出 reset</b><br><small>GPU 让 ARM 从内核入口开始执行 Linux；此后 VPU 固件退居后台，通过 mailbox/RPC 提供服务</small></div></div>
+    <div class="fdown">▼</div>
+    <div class="frow"><div class="fstep arm"><b>⑥ Linux 内核 → init / systemd</b><br><small>用户空间启动</small></div></div>
+  </div>
+
+  <div class="callout warn">
+    <span class="t">Pi 5 / CM5 的重要差异</span>
+    BCM2712 机型的固件<b>完全自包含在 EEPROM 里</b>，不再有 <code>start.elf</code> 那一套，EEPROM 引导程序直接加载 <code>kernel_2712.img</code>；且固件会<b>先校验设备树是否兼容</b>再启动（否则旧内核会直接挂住）。因此 Pi 5 没有经典彩虹屏。
+  </div>
+
+  <h3>overlay（设备树覆盖）到底谁在读？</h3>
+  <p>关键点：<b>是 GPU 固件（start.elf / EEPROM 引导程序）在把内核拉起来之前就读取并合并 overlay 的，不是 Linux 内核</b>。顺序是：</p>
+  <ol>
+    <li><code>start.elf</code> 先读 <code>dt-blob.bin</code> —— 这是"GPU 专用设备树"，决定早期 GPIO 状态、GPU 时钟等；</li>
+    <li>再读 <code>config.txt</code>，据此确定要加载哪个基础 DTB、以及 <code>dtoverlay=</code> / <code>dtparam=</code> 指定的一堆 overlay；</li>
+    <li>固件把 base DTB 与所有 overlay <b>在内存里合并成最终设备树</b>，再连同动态注入的信息（内存大小、MAC、时钟、DMA 通道等）一起交给内核；</li>
+    <li><code>os_prefix</code> 可让同一张卡放多套内核/DTB/overlay 并切换。</li>
+  </ol>
+  <p class="muted">这就是为什么"改 config.txt 里的 overlay"能改变硬件枚举——真正干活的是固件阶段，而不是内核在运行时去读 boot 分区。</p>
+</section>
+
+<!-- ============ 2. SoC 模块框图 ============ -->
+<section id="soc">
+  <h2>二、SoC 内部各模块框图（每块都标注用途）</h2>
+  <p>树莓派用的 Broadcom BCM2xxx 本质上是一颗<b>以 VideoCore 多媒体协处理器为核心、把 ARM"挂在旁边"</b>的 SoC。下图把一颗典型 BCM SoC 拆成模块，每个小框都标了它是什么、干什么：</p>
+
+  <div class="soc">
+    <div class="soc-title">Broadcom BCM2xxx SoC（单芯片集成）</div>
+    <div class="soc-grid">
+
+      <div class="blk gpu span2">
+        <span class="tag">协处理器 · 引导核心</span>
+        <h5>VPU — 双核 VideoCore 标量/向量处理器 @250MHz</h5>
+        <p>真正的"主处理器"。上电即运行，负责整个启动、电源管理、时钟、视频输出协调。<b>运行闭源 ThreadX RTOS</b>，<code>bootcode.bin</code>/<code>start.elf</code> 都在它上面执行。标量(整型+浮点)+整型向量 SIMD。</p>
+      </div>
+
+      <div class="blk gpu span2">
+        <span class="tag">GPU · 计算</span>
+        <h5>QPU — Quad Processor Units（3D/着色器）</h5>
+        <p>并行浮点着色单元，约 24 GFLOPS，处理顶点/像素着色与通用计算。这部分的文档与驱动是 2014 年 Broadcom 唯一开源的部分（Mesa VC4/V3D 驱动）。</p>
+      </div>
+
+      <div class="blk gpu">
+        <span class="tag">GPU · 影像</span>
+        <h5>ISP 图像信号处理</h5>
+        <p>镜头阴影校正、畸变校正、统计信息，服务于摄像头（CSI）。</p>
+      </div>
+
+      <div class="blk gpu">
+        <span class="tag">GPU · 编解码</span>
+        <h5>硬件视频编解码</h5>
+        <p>H.264 / H.265 硬解硬编（各代能力不同），BCM 芯片本行就是机顶盒多媒体。</p>
+      </div>
+
+      <div class="blk gpu span2">
+        <span class="tag">GPU · 显示</span>
+        <h5>显示 / HDMI / DSI 输出管线</h5>
+        <p>帧缓冲、HDMI 输出、DSI 屏接口。彩虹自检图就是这块被 VPU 固件点亮后画出来的。</p>
+      </div>
+
+      <div class="blk cpu span2">
+        <span class="tag">应用处理器</span>
+        <h5>ARM CPU 集群（跑 Linux 的那个）</h5>
+        <p>逐代升级：单核 ARM11 → 四核 A7 → A53 → A72 → A76。上电时被保持在 reset，直到 GPU 把内核准备好才被释放。<b>逻辑上是"外挂"在 VideoCore 旁边的</b>。</p>
+      </div>
+
+      <div class="blk mem">
+        <span class="tag">存储控制</span>
+        <h5>SDRAM 控制器 / 内存分割</h5>
+        <p>由第二级引导启用 SDRAM；GPU 与 ARM 共享内存，比例由固件（fixup.dat / config.txt）划分。</p>
+      </div>
+
+      <div class="blk mem">
+        <span class="tag">缓存</span>
+        <h5>L1 / L2 Cache</h5>
+        <p><code>bootcode.bin</code> 最初就是被载入 L2 cache 中执行（SDRAM 尚未就绪）。</p>
+      </div>
+
+      <div class="blk io span2">
+        <span class="tag">I/O · 外设</span>
+        <h5>外设：SD/eMMC · USB · I2C/SPI/UART · GPIO · 以太网 · PCIe*</h5>
+        <p>CM 的板载 eMMC 就接在"主 SD 卡接口"上。PCIe 从 BCM2711(Pi4) 起引入。各外设默认关闭，靠设备树 + overlay 启用。</p>
+      </div>
+
+      <div class="blk io span4">
+        <span class="tag">Pi 5 专属 · 自研南桥</span>
+        <h5>RP1 I/O 控制器（仅 BCM2712 / Pi 5 系列，独立芯片）</h5>
+        <p>树莓派自研，把 USB 3.0/2.0、千兆以太网、GPIO、部分外设从主 SoC 剥离到独立南桥，经 PCIe 连接。这是 Pi 5 相较此前所有代际最大的架构变化之一。</p>
+      </div>
+
+    </div>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--accent)"></i>VideoCore（GPU/协处理器，闭源固件运行处）</span>
+      <span><i class="dot" style="background:var(--accent2)"></i>ARM 应用处理器（跑 Linux）</span>
+      <span><i class="dot" style="background:#c9a227"></i>存储/缓存</span>
+      <span><i class="dot" style="background:var(--accent3)"></i>I/O 与外设</span>
+    </div>
+  </div>
+  <p class="muted">* PCIe 自 Pi 4 (BCM2711) 引入；RP1 南桥为 Pi 5 (BCM2712) 独有。</p>
+</section>
+
+<!-- ============ 3. 逆向 ISA 与 RTOS ============ -->
+<section id="isa">
+  <h2>三、逆向出来的 ISA 与 RTOS（公开 + 私有信息）</h2>
+
+  <div class="callout warn">
+    <span class="t">哪些是公开的、哪些是私有的</span>
+    <b>私有（Broadcom 从未公开）：</b><code>start.elf</code>/<code>bootcode.bin</code> 的源码、VPU 引导固件逻辑、VideoCore 完整 ISA 官方手册。<br>
+    <b>公开（官方）：</b>仅 2014 年开源的 <b>QPU 3D 图形核心</b>文档与驱动（BSD 许可）。<br>
+    <b>社区逆向得到的：</b>VPU 指令集、寄存器映射、反汇编器、以及"VPU 上跑 ThreadX"这一结论——全部来自 Herman Hermitage 等人的逆向与专利研究。
+  </div>
+
+  <h3>VPU（VideoCore IV 标量/向量核）ISA —— 逆向结论</h3>
+  <ul>
+    <li>32 个寄存器，可存整数或 32 位浮点（浮点与整数共用寄存器）；</li>
+    <li>类 ARM 的 32 位三操作数指令，外加一批 16 位双操作数短指令；</li>
+    <li>存在 <b>48 位指令形态</b>，可直接携带完整 32 位立即数（不用 ARM 那种常量池，也不用 PowerPC 的拆分立即数）；</li>
+    <li>双核 + 集成中断控制器；</li>
+    <li>内建 <b>80 位向量 DSP</b>，工作在一个 64×64×8bit 的"方形寄存器阵列"上，可按行/按列访问做 SIMD——面向视频解码；</li>
+    <li>类 ARM 的条件执行、寄存器批量 load/save（push/pop）、DSP 式饱和运算与定点支持。</li>
+  </ul>
+
+  <h3>QPU（3D 着色器核）ISA —— 官方 2014 已公开</h3>
+  <ul>
+    <li>定长 64 位指令字，单条指令内含多个发射槽（Add 向量 ALU + Multiply 向量 ALU）；</li>
+    <li>分支有 3 个延迟槽；线程切换靠协作式 thread-switch 指令；</li>
+    <li>寄存器写后需隔 1 个指令周期才能读回；程序以带 program-end 信号的指令结束。</li>
+  </ul>
+
+  <h3>RTOS：ThreadX</h3>
+  <p>整颗 SoC 在启动期由载入 VPU 的 <b>ThreadX RTOS</b>（Express Logic 的商用实时系统，后为微软 Azure RTOS）管理。<code>start.elf</code> 本质就是"ThreadX + 一堆固件服务"的打包二进制。ARM 上的 Linux 起来后，VPU 仍在后台跑 ThreadX，通过 mailbox/RPC 为 Linux 提供时钟、电源、显示、编解码等服务。</p>
+
+  <div class="callout ok">
+    <span class="t">能逆向、能改吗（呼应上一问）</span>
+    ISA 已被逆向、有反汇编器，所以<b>逆向可行</b>；但直接改 <code>start.elf</code> 极不划算（无符号、私有 ISA+RTOS、新板有 secure boot 签名校验、且涉及 Broadcom IP）。务实路线是用 <code>config.txt</code> 配置，或用 <code>kernel=u-boot.bin</code> 把控制权交给开源可编程的 U-Boot 阶段。曾有 <code>rpi-open-firmware</code> 尝试开源替代，但仅在早期 Pi 上实验性可用，不支持 Pi 3/4/5。
+  </div>
+</section>
+
+<!-- ============ 4. 逐代 SoC / GPU 差异 ============ -->
+<section id="gen">
+  <h2>四、Pi 1 → Pi 5 逐代 SoC、CPU、GPU 与 overlay/内核差异</h2>
+  <table>
+    <tr>
+      <th>代际 / 机型</th><th>SoC</th><th>CPU</th><th>GPU</th><th>默认内核名</th><th>第二级引导</th>
+    </tr>
+    <tr>
+      <td>Pi 1 / Zero / Zero W / <b>CM1</b></td><td>BCM2835</td>
+      <td>1× ARM1176JZF-S（ARMv6）700MHz–1GHz</td>
+      <td>VideoCore IV @250MHz</td>
+      <td><code>kernel.img</code></td>
+      <td><code>bootcode.bin</code>（SD）</td>
+    </tr>
+    <tr>
+      <td>Pi 2 B（早期）</td><td>BCM2836</td>
+      <td>4× Cortex-A7（ARMv7，32 位）900MHz</td>
+      <td>VideoCore IV @250MHz</td>
+      <td><code>kernel7.img</code></td>
+      <td><code>bootcode.bin</code>（SD）</td>
+    </tr>
+    <tr>
+      <td>Pi 2 v1.2 / Pi 3 / <b>CM3 / CM3+</b> / Zero 2 W</td><td>BCM2837 / B0 / RP3A0</td>
+      <td>4× Cortex-A53（ARMv8，64 位）1.2–1.4GHz</td>
+      <td>VideoCore IV（core 400 / V3D 300MHz）</td>
+      <td><code>kernel7.img</code>（32 位）/ <code>kernel8.img</code></td>
+      <td><code>bootcode.bin</code>（SD）</td>
+    </tr>
+    <tr>
+      <td>Pi 4 / 400 / <b>CM4 / CM4S</b></td><td>BCM2711</td>
+      <td>4× Cortex-A72（ARMv8）1.5–1.8GHz</td>
+      <td>VideoCore <b>VI</b> @500MHz；首次带 PCIe/MMU 升级</td>
+      <td><code>kernel8.img</code>（64 位）/ <code>kernel7l.img</code>（32 位）</td>
+      <td><b>SPI EEPROM</b> 引导程序</td>
+    </tr>
+    <tr>
+      <td>Pi 5 / 500 / <b>CM5</b></td><td>BCM2712</td>
+      <td>4× Cortex-A76（ARMv8.2）2.4GHz</td>
+      <td>VideoCore <b>VII</b> @800MHz；外加 <b>RP1 南桥</b></td>
+      <td><code>kernel_2712.img</code>（仅 64 位）</td>
+      <td><b>EEPROM 自包含固件</b>（无 start.elf）</td>
+    </tr>
+  </table>
+  <p class="muted">要点：GPU 从 Pi 1–3 一直是 VideoCore IV，Pi 4 才升到 VI、Pi 5 到 VII；引导方式从"SD 上的 bootcode.bin"演进到"板载 EEPROM"，Pi 5 更是把整套固件都塞进 EEPROM。overlay 合并机制各代一致（都在固件阶段完成），但 Pi 5 增加了"启动前校验 DTB 兼容性"。</p>
+</section>
+
+<!-- ============ 5. CM vs 板载 eMMC ============ -->
+<section id="cm">
+  <h2>五、Compute Module（CM）与"板载 eMMC 设备"的逐代差异</h2>
+  <p>普通 Pi 从可插拔 SD 卡启动；<b>Compute Module 把 eMMC 闪存直接焊在模块上，接到 SoC 的"主 SD 卡接口"</b>。这带来一套专门的烧录/启动机制（<code>rpiboot</code>/usbboot：让模块以 USB 大容量存储设备出现在主机上再写入）。逐代差异如下：</p>
+
+  <h3>启动介质与烧录机制</h3>
+  <table>
+    <tr><th>模块</th><th>SoC</th><th>进入烧录模式</th><th>USB gadget 机制</th><th>专属设备树</th><th>备注</th></tr>
+    <tr>
+      <td><b>CM1</b></td><td>BCM2835</td>
+      <td><code>nRPI_BOOT</code>/EMMC-DISABLE 跳线</td>
+      <td>旧式 <code>msd</code> 固件接口（legacy）</td>
+      <td><code>bcm2708-rpi-cm.dtb</code></td>
+      <td>引导返回的 USB 包略有瑕疵，个别主机 USB 口不识别</td>
+    </tr>
+    <tr>
+      <td><b>CM3 / CM3+</b></td><td>BCM2837</td>
+      <td>EMMC-DISABLE 跳线</td>
+      <td>现代 Linux mass-storage gadget（更可靠，支持 UART 控制台）</td>
+      <td><code>bcm2710-rpi-cm3.dtb</code></td>
+      <td>修复了 CM1 的 USB 包 bug；少数因 FAT32 分区时序问题需手动建分区</td>
+    </tr>
+    <tr>
+      <td><b>CM4 / CM4S</b></td><td>BCM2711</td>
+      <td><code>nRPIBOOT</code> = GPIO 40 拉低，否则加载 SPI EEPROM</td>
+      <td>gadget + <code>rpiboot</code> 还用于<b>更新 EEPROM</b>；推荐用 <code>boot.img</code></td>
+      <td>CM4 专属 DTB</td>
+      <td>引入 SPI EEPROM 引导；绿灯由软件 bootloader 点亮</td>
+    </tr>
+    <tr>
+      <td><b>CM5</b></td><td>BCM2712</td>
+      <td><code>nRPIBOOT</code> = BCM2712 GPIO 20 拉低，否则加载 EEPROM</td>
+      <td><code>rpiboot -d mass-storage-gadget64</code>（用 Linux initramfs，带 UART/HDMI 登录台）</td>
+      <td>CM5 专属 DTB</td>
+      <td>EEPROM 默认支持 MMC / USB-MSD / 网络 / <b>NVMe</b> 启动</td>
+    </tr>
+  </table>
+
+  <div class="callout ok">
+    <span class="t">CM 与普通 Pi 在启动上的本质区别</span>
+    <b>①存储：</b>CM 用板载 eMMC（焊死、更可靠、需 rpiboot 烧录），普通 Pi 用可插拔 SD/USB。<br>
+    <b>②设备树策略：</b>普通 Pi 有随机型固定的 DTB；CM 的基础 DTB<b>几乎不定义 GPIO</b>（除 eMMC/SD 引脚），把具体引脚功能交给<b>用户自定义 overlay</b>——因为 CM 是给你自己做载板的，引脚怎么用由载板决定。<br>
+    <b>③引导演化：</b>CM1 老式 msd → CM3 现代 gadget → CM4/CM5 引入 SPI EEPROM 与 nRPIBOOT 跳线，CM5 的 EEPROM 直接支持 NVMe/网络启动。<br>
+    这三点，就是"读 overlay、启动介质、GPU/固件"在 CM 与带 eMMC 机型上逐代变化的全部要点。
+  </div>
+
+  <h3>rpiboot 分阶段（CM4/CM5，来自官方 troubleshooting）</h3>
+  <p>烧录过程本身就是一个"缩微版启动"：ROM → <code>bootcode.bin</code> → VPU 固件（<code>start.elf</code>）→（大容量存储 gadget 模式下）Linux initramfs。每一级都会断开并以新的 USB 描述符重新出现，可在主机 <code>dmesg</code> 里逐级看到。这也印证了前面的启动链模型。</p>
+</section>
+
+<footer style="text-align:center;color:var(--muted);font-size:.82em;padding:8px 16px 40px;">
+  资料整合自 Raspberry Pi 官方文档 / usbboot 仓库、DeepWiki、BeyondLogic、RPi StackExchange、Hacker News、Wikipedia 及 Herman Hermitage 的 VideoCore IV 逆向工程项目 · 2026-08
+</footer>
+</main>
+</body>
+</html>
