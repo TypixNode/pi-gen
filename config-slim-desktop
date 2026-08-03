@@ -56,6 +56,11 @@ export SLIM_STRIP_DOCS="${SLIM_STRIP_DOCS:-1}"
 # Keep apt's package indices compressed and skip the source cache.
 export SLIM_APT_TRIM="${SLIM_APT_TRIM:-1}"
 
+# Turn off the armhf multiarch that stage0 enables on arm64. Nothing in the image
+# is armhf, and the architecture costs ~50MB of package indices and apt cache.
+# Set to 0 if you need to install 32-bit packages.
+export SLIM_DROP_FOREIGN_ARCH="${SLIM_DROP_FOREIGN_ARCH:-1}"
+
 # Wi-Fi/Bluetooth firmware to keep. BCM43438/43455 covers every Compute Module
 # and Raspberry Pi with onboard wireless; the other blobs are 220MB between
 # them. Set to an empty string on a module without wireless.
