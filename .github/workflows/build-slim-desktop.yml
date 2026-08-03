@@ -151,6 +151,11 @@ jobs:
             "$([ "$KERNELS" -eq 1 ] && echo 1 || echo 0)"
           check "lightdm session is $EXPECTED_SESSION (found ${SESSION:-none})" \
             "$([ "$SESSION" = "$EXPECTED_SESSION" ] && echo 1 || echo 0)"
+          # A session lightdm cannot find is the difference between a desktop and
+          # a black screen, and only one of the two session stacks is installed.
+          check "the $SESSION session is actually installed" \
+            "$(sudo test -e "/tmp/img/root/usr/share/wayland-sessions/$SESSION.desktop" || \
+               sudo test -e "/tmp/img/root/usr/share/xsessions/$SESSION.desktop" && echo 1 || echo 0)"
           check "boot partition carries a kernel and an initramfs" \
             "$(sudo test -e /tmp/img/boot/kernel8.img && sudo test -e /tmp/img/boot/initramfs8 && echo 1 || echo 0)"
           if [ "$SLIM_KEEP_TOOLCHAIN" = '1' ]; then
