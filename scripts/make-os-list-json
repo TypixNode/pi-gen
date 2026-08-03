@@ -29,6 +29,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import sys
 
 # Enough of the upstream device list for Imager's device picker to filter this
@@ -72,6 +73,14 @@ DEVICES = [
 ]
 
 
+DECOMPRESSORS = {
+    ".xz": ["xz", "-dc"],
+    ".gz": ["gzip", "-dc"],
+    ".zst": ["zstd", "-dc"],
+    ".zip": ["funzip"],
+}
+
+
 def sha256(path):
     digest = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -80,11 +89,28 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def measure_uncompressed(archive):
+    """(size, sha256) of what Imager will write, read by streaming the archive."""
+    _, ext = os.path.splitext(archive)
+    if ext not in DECOMPRESSORS:
+        return os.path.getsize(archive), sha256(archive)
+    proc = subprocess.Popen(DECOMPRESSORS[ext] + [archive], stdout=subprocess.PIPE)
+    digest, size = hashlib.sha256(), 0
+    for block in iter(lambda: proc.stdout.read(4 << 20), b""):
+        digest.update(block)
+        size += len(block)
+    proc.stdout.close()
+    if proc.wait() != 0:
+        raise SystemExit(f"failed to decompress {archive}")
+    return size, digest.hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--image", required=True,
-                        help="the uncompressed .img, for extract_size/extract_sha256")
+    parser.add_argument("--image",
+                        help="the uncompressed .img, for extract_size/extract_sha256; "
+                             "measured by decompressing --archive when not given")
     parser.add_argument("--archive", required=True,
                         help="the compressed image Imager downloads")
     parser.add_argument("--url", required=True, help="where --archive will be served from")
@@ -101,16 +127,24 @@ def main():
     parser.add_argument("--capabilities", default="rpi_connect",
                         help="comma separated, empty string for none")
     parser.add_argument("--website", default="")
+    parser.add_argument("--merge-into",
+                        help="an existing OS list to add this entry to; an entry "
+                             "with the same name is replaced rather than duplicated")
     parser.add_argument("--output", default="-")
     args = parser.parse_args()
+
+    if args.image:
+        extract_size, extract_sha256 = os.path.getsize(args.image), sha256(args.image)
+    else:
+        extract_size, extract_sha256 = measure_uncompressed(args.archive)
 
     entry = {
         "name": args.name,
         "description": args.description,
         "icon": args.icon,
         "url": args.url,
-        "extract_size": os.path.getsize(args.image),
-        "extract_sha256": sha256(args.image),
+        "extract_size": extract_size,
+        "extract_sha256": extract_sha256,
         "image_download_size": os.path.getsize(args.archive),
         "image_download_sha256": sha256(args.archive),
         "release_date": args.release_date,
@@ -121,10 +155,15 @@ def main():
     if args.website:
         entry["website"] = args.website
 
-    document = {
-        "imager": {"devices": DEVICES},
-        "os_list": [entry],
-    }
+    document = {"imager": {"devices": DEVICES}, "os_list": []}
+    if args.merge_into and os.path.exists(args.merge_into):
+        with open(args.merge_into) as fh:
+            document = json.load(fh)
+        document.setdefault("imager", {"devices": DEVICES})
+        document.setdefault("os_list", [])
+    document["os_list"] = [e for e in document["os_list"]
+                           if e.get("name") != entry["name"]] + [entry]
+
     text = json.dumps(document, indent=2) + "\n"
     if args.output == "-":
         sys.stdout.write(text)
