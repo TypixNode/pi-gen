@@ -210,14 +210,18 @@ jobs:
       - name: Assemble the release
         run: |
           sudo chown -R "$(id -u):$(id -g)" deploy
-          # Imager downloads the image straight from the URL in the OS list, so
-          # both the tag and the file name have to stay the same across builds.
+          # Every build gets its own release, and its image asset is never
+          # replaced. Imager verifies the image against the hash it read from the
+          # OS list, so an image URL whose contents change breaks every OS list
+          # that has already been fetched and cached - the pointer release below
+          # is what moves instead.
           if [ "$GITHUB_REF_TYPE" = tag ]; then
-            TAG="$GITHUB_REF_NAME"
+            BUILD_TAG="$GITHUB_REF_NAME"
           else
-            TAG=slim-desktop-latest
+            BUILD_TAG="slim-desktop-build-$(date -u +%Y%m%d)-${GITHUB_SHA:0:7}"
           fi
-          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "BUILD_TAG=$BUILD_TAG" >> "$GITHUB_ENV"
+          echo "POINTER_TAG=slim-desktop-latest" >> "$GITHUB_ENV"
 
           ARCHIVE="$(ls deploy/image_*.img.xz deploy/image_*.img.gz deploy/image_*.zip \
             deploy/*.img 2>/dev/null | head -1)"
@@ -241,7 +245,7 @@ jobs:
           ./scripts/make-os-list-json \
             --image "$WORK_DIR"/export-image/*.img \
             --archive "release/$ASSET" \
-            --url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/$ASSET" \
+            --url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$BUILD_TAG/$ASSET" \
             --release-date "$(date -u +%Y-%m-%d)" \
             --devices pi4-64bit,pi3-64bit \
             --capabilities "$([ "$SLIM_RPI_CONNECT" = 1 ] && echo rpi_connect || echo '')" \
@@ -256,26 +260,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            PRERELEASE=
-            TITLE="Raspberry Pi OS slim desktop $RELEASE_TAG"
-          else
-            PRERELEASE=--prerelease
-            TITLE="Raspberry Pi OS slim desktop (latest build)"
-          fi
-
-          IMAGER_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/os_list.json"
+          BUILD_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$BUILD_TAG"
+          POINTER_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$POINTER_TAG"
           {
             echo 'arm64 Raspberry Pi OS with the desktop, trimmed to fit 4GB storage'
             echo '(Compute Module 3 and up), built from `config-slim-desktop`.'
             echo
             echo '## Raspberry Pi Imager'
             echo
-            echo 'Point Imager at this build to get it in the OS picker with the'
-            echo 'advanced options working:'
+            echo 'To follow the newest build:'
             echo
             echo '```'
-            echo "rpi-imager --repo $IMAGER_URL"
+            echo "rpi-imager --repo $POINTER_URL/os_list.json"
+            echo '```'
+            echo
+            echo 'To pin this build, whose image and checksums will never change:'
+            echo
+            echo '```'
+            echo "rpi-imager --repo $BUILD_URL/os_list.json"
             echo '```'
             echo
             echo 'Hostname, username and password, SSH keys, Wi-Fi credentials,'
@@ -293,24 +295,78 @@ jobs:
             done
           } > release-notes.md
 
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --title "$TITLE" --notes-file release-notes.md
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            PRERELEASE=
           else
-            gh release create "$RELEASE_TAG" $PRERELEASE \
-              --target "$GITHUB_SHA" --title "$TITLE" --notes-file release-notes.md
+            PRERELEASE=--prerelease
           fi
-          gh release upload "$RELEASE_TAG" release/* --clobber
+          if ! gh release view "$BUILD_TAG" >/dev/null 2>&1; then
+            gh release create "$BUILD_TAG" $PRERELEASE --target "$GITHUB_SHA" \
+              --title "Raspberry Pi OS slim desktop $BUILD_TAG" \
+              --notes-file release-notes.md
+          fi
+          # --clobber only ever replaces assets of a re-run of this same commit.
+          gh release upload "$BUILD_TAG" release/* --clobber
+
+          # The pointer release carries nothing but the OS list, so a copy of it
+          # that Imager or a CDN has cached still names an image that exists and
+          # still matches the hashes it was published with.
+          if [ "$GITHUB_REF_TYPE" != tag ]; then
+            {
+              echo 'OS list for Raspberry Pi Imager, pointing at the newest build.'
+              echo
+              echo '```'
+              echo "rpi-imager --repo $POINTER_URL/os_list.json"
+              echo '```'
+              echo
+              echo "Currently: [$BUILD_TAG]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$BUILD_TAG)"
+            } > pointer-notes.md
+            if gh release view "$POINTER_TAG" >/dev/null 2>&1; then
+              gh release edit "$POINTER_TAG" --notes-file pointer-notes.md
+            else
+              gh release create "$POINTER_TAG" --prerelease --target "$GITHUB_SHA" \
+                --title "Raspberry Pi OS slim desktop (OS list for the newest build)" \
+                --notes-file pointer-notes.md
+            fi
+            gh release upload "$POINTER_TAG" release/os_list.json --clobber
+            # Nothing else belongs here: an image served from a URL that later
+            # changes is what broke hash verification in the first place.
+            gh release view "$POINTER_TAG" --json assets \
+              --jq '.assets[].name | select(. != "os_list.json")' |
+            while read -r extra; do
+              [ -n "$extra" ] || continue
+              echo "removing $extra from $POINTER_TAG"
+              gh release delete-asset "$POINTER_TAG" "$extra" --yes
+            done
+          fi
 
           {
             echo
-            echo "Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+            echo "Build release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$BUILD_TAG"
             echo
             echo 'Add to Raspberry Pi Imager:'
             echo
             echo '```'
-            echo "rpi-imager --repo $IMAGER_URL"
+            echo "rpi-imager --repo $POINTER_URL/os_list.json"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prune superseded build releases
+        if: github.ref_type != 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Keep a few builds so that an OS list fetched a while ago still
+          # resolves; beyond that a stale list gets an honest 404 rather than
+          # silently pointing at different bytes.
+          gh release list --limit 100 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("slim-desktop-build-"))]
+                  | sort_by(.createdAt) | reverse | .[5:] | .[].tagName' |
+          while read -r old; do
+            [ -n "$old" ] || continue
+            echo "deleting superseded $old"
+            gh release delete "$old" --yes --cleanup-tag
+          done
 
       - uses: actions/upload-artifact@v4
         with:
