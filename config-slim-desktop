@@ -4,7 +4,7 @@
 #
 # The stock desktop image is 6.5GB and the previous (Bookworm) one 6.2GB, so
 # neither can be written to a 4GB module. This configuration replaces stage3 to
-# stage5 with stage-slim-desktop, which trims the Lite rootfs and then installs
+# stage5 with slim-desktop-stage, which trims the Lite rootfs and then installs
 # the Raspberry Pi Desktop from the individual packages behind the rpd-* meta-
 # packages instead of the metapackages themselves. The result is roughly a
 # 3.0GB image that leaves about 1GB free once the root filesystem has grown to
@@ -17,7 +17,10 @@
 
 IMG_NAME="${IMG_NAME:-raspios-slim-desktop}"
 
-STAGE_LIST="stage0 stage1 stage2 stage-slim-desktop"
+# The directory is deliberately not called stage-something: the default STAGE_LIST
+# is the glob stage*, which would sort a stage-* directory ahead of stage0 and
+# break every build that does not use this config.
+STAGE_LIST="stage0 stage1 stage2 slim-desktop-stage"
 
 # One kernel flavour and one Wi-Fi blob means the boot partition never gets
 # close to the 512MB the stock images reserve.
@@ -39,7 +42,7 @@ ROOT_MARGIN_FIXED="${ROOT_MARGIN_FIXED:-$((200 * 1024 * 1024))}"
 # customisation silently does nothing.
 ENABLE_CLOUD_INIT="${ENABLE_CLOUD_INIT:-1}"
 
-# --- stage-slim-desktop knobs -------------------------------------------------
+# --- slim-desktop-stage knobs -------------------------------------------------
 # These are read by the stage's scripts, which run as child processes, so they
 # have to be exported.
 
@@ -96,7 +99,7 @@ export SLIM_KEEP_TOOLCHAIN="${SLIM_KEEP_TOOLCHAIN:-1}"
 #   rpi-imager                   39MB
 export SLIM_EXTRA_PACKAGES="${SLIM_EXTRA_PACKAGES-}"
 
-# The defaults for these live in stage-slim-desktop; override to reshape the
+# The defaults for these live in slim-desktop-stage; override to reshape the
 # package selection without editing the stage.
 #export SLIM_PURGE_PACKAGES=""
 #export SLIM_THEME_PACKAGES=""

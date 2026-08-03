@@ -423,7 +423,7 @@ Bookworm and Bullseye images before it were 6.2GB and 4.3GB, so none of them can
 be written to a 4GB eMMC module such as a Compute Module 3.
 
 `config-slim-desktop` builds a desktop image that fits, by replacing stages 3 to
-5 with `stage-slim-desktop`:
+5 with `slim-desktop-stage`:
 
 ```bash
 touch ./stage2/SKIP_IMAGES
@@ -432,7 +432,7 @@ sudo ./build.sh -c config-slim-desktop
 
 The `rpd-*` metapackages that stage 3 and stage 4 install carry no `Depends`,
 only `Recommends`, so the desktop can be assembled from the packages behind them
-one at a time. `stage-slim-desktop` first trims the Lite rootfs - the Wi-Fi blobs
+one at a time. `slim-desktop-stage` first trims the Lite rootfs - the Wi-Fi blobs
 for chipsets the target does not have, the kernel flavour it cannot boot,
 cloud-init, armhf multiarch, documentation and non-default translations - and
 then installs a single desktop session, the theme, the control panels, one
