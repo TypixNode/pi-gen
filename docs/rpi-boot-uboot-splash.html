@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>树莓派启动流程、U-Boot 对比与彩虹屏定制指南</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --text: #24292f;
+    --muted: #57606a;
+    --accent: #c51a4a;      /* Raspberry Pi 品牌红 */
+    --accent-2: #6cc04a;    /* Raspberry Pi 品牌绿 */
+    --border: #d8dee4;
+    --code-bg: #f0f2f5;
+    --warn-bg: #fff8e6;
+    --warn-border: #f0c36d;
+    --ok-bg: #eefaf0;
+    --ok-border: #6cc04a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.75;
+  }
+  header {
+    background: linear-gradient(135deg, #b01543 0%, #c51a4a 55%, #e2336b 100%);
+    color: #fff;
+    padding: 48px 24px 40px;
+    text-align: center;
+  }
+  header h1 { margin: 0 0 10px; font-size: 1.9em; }
+  header p { margin: 0; opacity: .92; }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 20px 64px; }
+  section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 32px;
+    margin-bottom: 28px;
+  }
+  h2 {
+    margin-top: 0;
+    font-size: 1.4em;
+    border-bottom: 3px solid var(--accent);
+    display: inline-block;
+    padding-bottom: 4px;
+  }
+  h3 { font-size: 1.12em; margin-top: 1.6em; color: var(--accent); }
+  code {
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 5px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: .9em;
+  }
+  pre {
+    background: #1f2328;
+    color: #e6edf3;
+    padding: 16px 20px;
+    border-radius: 10px;
+    overflow-x: auto;
+    font-size: .88em;
+    line-height: 1.6;
+  }
+  pre code { background: none; color: inherit; padding: 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 16px 0;
+    font-size: .95em;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 10px 14px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #fbecf1; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  .flow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 8px;
+    margin: 18px 0;
+  }
+  .flow .step {
+    flex: 1 1 150px;
+    background: #fbecf1;
+    border: 1px solid #eab6c6;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: .88em;
+    position: relative;
+  }
+  .flow .step strong { display: block; color: var(--accent); margin-bottom: 4px; }
+  .flow .arrow {
+    align-self: center;
+    font-size: 1.3em;
+    color: var(--muted);
+    flex: 0 0 auto;
+  }
+  .callout {
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin: 18px 0;
+  }
+  .callout.warn { background: var(--warn-bg); border: 1px solid var(--warn-border); }
+  .callout.ok { background: var(--ok-bg); border: 1px solid var(--ok-border); }
+  .callout .title { font-weight: 700; display: block; margin-bottom: 4px; }
+  .rainbow-demo {
+    display: flex;
+    height: 56px;
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 14px 0;
+    border: 1px solid var(--border);
+  }
+  .rainbow-demo div { flex: 1; }
+  .muted { color: var(--muted); font-size: .9em; }
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: .85em;
+    padding: 0 20px 40px;
+  }
+  @media (max-width: 640px) {
+    section { padding: 20px 18px; }
+    .flow { flex-direction: column; }
+    .flow .arrow { transform: rotate(90deg); align-self: flex-start; margin-left: 20px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>树莓派启动原理、U-Boot 对比与彩虹屏定制指南</h1>
+  <p>启动加载流程 · U-Boot 与固件直启 Linux 的区别 · 彩虹屏的真相与开机画面定制方案</p>
+</header>
+
+<main>
+
+<!-- ======================================================= -->
+<section id="boot-flow">
+  <h2>一、技术原理与启动加载流程</h2>
+
+  <p>树莓派与绝大多数 ARM 开发板最大的不同是：<strong>它是"GPU 先启动"的架构</strong>。
+  上电后先运行的不是 ARM CPU，而是 Broadcom SoC 里的 VideoCore GPU。
+  整个启动早期阶段由 GPU 上运行的<strong>闭源固件</strong>完成，ARM 核心直到内核（或 U-Boot）被加载好之后才被"唤醒"。</p>
+
+  <h3>1. 默认启动链（Raspberry Pi 1 – 3 / Zero 系列）</h3>
+  <div class="flow">
+    <div class="step"><strong>① BootROM</strong>SoC 内部固化的只读代码，由 GPU 执行，负责找到启动介质</div>
+    <div class="arrow">→</div>
+    <div class="step"><strong>② bootcode.bin</strong>位于 TF 卡 FAT 分区（boot 分区），第二阶段引导，初始化 SDRAM</div>
+    <div class="arrow">→</div>
+    <div class="step"><strong>③ start.elf + fixup.dat</strong>GPU 主固件：读取 config.txt、显示彩虹屏、加载内核与设备树</div>
+    <div class="arrow">→</div>
+    <div class="step"><strong>④ kernel8.img 等</strong>ARM 核心被释放，直接从内核入口开始执行 Linux</div>
+  </div>
+
+  <h3>2. Raspberry Pi 4 / 5 的差异</h3>
+  <ul>
+    <li><strong>Pi 4：</strong><code>bootcode.bin</code> 被板载 <strong>SPI EEPROM 中的引导程序</strong>取代（可网络启动、USB 启动、可升级），之后仍加载 <code>start4.elf</code>，流程与上面一致。</li>
+    <li><strong>Pi 5：</strong>更进一步，<code>start.elf</code> 系列被彻底移除，EEPROM 引导程序直接加载内核/设备树。<strong>因此 Pi 5 上没有彩虹屏</strong>，取而代之的是固件自绘的诊断/自检画面。</li>
+  </ul>
+
+  <h3>3. boot 分区上各文件的角色</h3>
+  <table>
+    <tr><th>文件</th><th>作用</th></tr>
+    <tr><td><code>bootcode.bin</code></td><td>第二阶段引导（Pi 1–3；Pi 4/5 已移入 EEPROM）</td></tr>
+    <tr><td><code>start*.elf</code> / <code>fixup*.dat</code></td><td>GPU 主固件及其内存分配配置（Pi 5 无此文件）</td></tr>
+    <tr><td><code>config.txt</code></td><td>固件的"BIOS 设置"：超频、显示、设备树 overlay、指定内核文件名等</td></tr>
+    <tr><td><code>cmdline.txt</code></td><td>传给 Linux 内核的命令行参数（单行）</td></tr>
+    <tr><td><code>kernel8.img</code> / <code>kernel_2712.img</code> 等</td><td>Linux 内核镜像（也可以换成 <code>u-boot.bin</code>）</td></tr>
+    <tr><td><code>bcm27xx-*.dtb</code>、<code>overlays/</code></td><td>设备树及其 overlay，由固件加载并动态修补后传给内核</td></tr>
+  </table>
+
+  <p class="muted">在本仓库（pi-gen）中，<code>config.txt</code> 与 <code>cmdline.txt</code> 的模板位于
+  <code>stage1/00-boot-files/files/</code>，由 <code>stage1/00-boot-files/00-run.sh</code>
+  安装到镜像的 <code>/boot/firmware/</code>；固件与内核文件由 stage2 安装的
+  <code>raspberrypi-bootloader</code> / <code>linux-image-*</code> 等 deb 包提供。</p>
+</section>
+
+<!-- ======================================================= -->
+<section id="uboot-vs-linux">
+  <h2>二、U-Boot 启动与默认直启 Linux 内核的区别</h2>
+
+  <p>关键点：<strong>U-Boot 并不替代树莓派的 GPU 固件，而是"插在"固件和 Linux 之间</strong>。
+  做法是在 <code>config.txt</code> 里写 <code>kernel=u-boot.bin</code>，让固件把 U-Boot
+  当成"内核"来加载；之后由 U-Boot 负责真正加载 Linux 内核、设备树和 initramfs。</p>
+
+  <div class="flow">
+    <div class="step"><strong>固件直启（默认）</strong>BootROM → 固件 → <em>Linux 内核</em></div>
+    <div class="arrow">对比</div>
+    <div class="step"><strong>U-Boot 方式</strong>BootROM → 固件 → <em>u-boot.bin</em> → boot.scr / extlinux.conf → Linux 内核</div>
+  </div>
+
+  <table>
+    <tr><th>维度</th><th>固件直启 Linux（树莓派默认）</th><th>经由 U-Boot 启动</th></tr>
+    <tr>
+      <td>启动链长度</td>
+      <td>短，开机更快</td>
+      <td>多一级引导，略慢（约多 1–2 秒）</td>
+    </tr>
+    <tr>
+      <td>配置方式</td>
+      <td><code>config.txt</code> + <code>cmdline.txt</code>，树莓派私有格式</td>
+      <td>U-Boot 环境变量、<code>boot.scr</code> 脚本、标准 <code>extlinux.conf</code>（Distro Boot）</td>
+    </tr>
+    <tr>
+      <td>交互能力</td>
+      <td>无。固件不可交互、闭源</td>
+      <td>有串口/HDMI 命令行 shell，可手动加载内核、读写内存、烧写、调试</td>
+    </tr>
+    <tr>
+      <td>多系统 / A-B 冗余</td>
+      <td>依赖 <code>autoboot.txt</code>/tryboot 机制，能力有限</td>
+      <td>脚本任意编排：启动菜单、多内核选择、失败自动回滚、看门狗配合</td>
+    </tr>
+    <tr>
+      <td>网络 / 脚本启动</td>
+      <td>Pi 4/5 的 EEPROM 支持 PXE，但逻辑固定</td>
+      <td>TFTP、NFS、HTTP、USB、NVMe……加载逻辑完全可编程</td>
+    </tr>
+    <tr>
+      <td>设备树处理</td>
+      <td>固件加载 DTB 并自动应用 overlay、注入内存/MAC 等信息</td>
+      <td>通常配置 U-Boot 复用"固件已修补好"的 DTB；若 U-Boot 自己加载 DTB，会<strong>丢失固件的动态修补</strong>，overlay 需另行处理（常见坑）</td>
+    </tr>
+    <tr>
+      <td>生态与可移植性</td>
+      <td>树莓派专属</td>
+      <td>嵌入式行业标准：Yocto、Buildroot、OpenWrt、Home Assistant OS、Debian 通用 arm64 镜像都用它</td>
+    </tr>
+    <tr>
+      <td>典型使用场景</td>
+      <td>桌面/日常使用，追求简单和快</td>
+      <td>产品化设备：OTA 升级、双分区回滚、统一多平台引导、启动画面定制</td>
+    </tr>
+  </table>
+
+  <div class="callout ok">
+    <span class="title">一句话总结</span>
+    默认方式 = 简单、快、够用；U-Boot = 多一级可编程的引导层，换来标准化、可交互、可定制（包括在引导阶段显示自定义图片）。
+    另外注意：<strong>彩虹屏发生在固件阶段，在 U-Boot 之前</strong>，所以换用 U-Boot 并不会去掉彩虹屏。
+  </div>
+</section>
+
+<!-- ======================================================= -->
+<section id="rainbow">
+  <h2>三、彩虹屏在哪个环节、哪个文件？能定制吗？</h2>
+
+  <div class="rainbow-demo" aria-hidden="true">
+    <div style="background:#ff0000"></div><div style="background:#ff9900"></div>
+    <div style="background:#ffff00"></div><div style="background:#00cc00"></div>
+    <div style="background:#0066ff"></div><div style="background:#6600cc"></div>
+  </div>
+
+  <h3>它属于哪个环节？</h3>
+  <p>彩虹屏出现在<strong>第 ③ 阶段——GPU 主固件 <code>start.elf</code>（Pi 4 上是 <code>start4.elf</code>）运行时</strong>，
+  也就是固件初始化显示输出之后、Linux 内核（或 U-Boot）接管之前。它同时充当 GPU 的显示自检图。</p>
+
+  <h3>具体是哪个文件？</h3>
+  <div class="callout warn">
+    <span class="title">重要结论：它不是一张图片文件</span>
+    彩虹图案是 <code>start.elf</code> 固件<strong>在运行时用代码程序化生成的渐变测试图</strong>，
+    并不存在于 TF 卡上的任何 PNG/BMP 文件里。而 <code>start.elf</code> 是 Broadcom/树莓派基金会的
+    <strong>闭源二进制固件</strong>，没有公开源码和资源段格式，因此<strong>彩虹屏本身无法被替换成自定义图片</strong>。
+  </div>
+
+  <p>你唯一能做的官方操作是在 <code>config.txt</code> 中<strong>关闭它</strong>：</p>
+<pre><code># /boot/firmware/config.txt
+disable_splash=1</code></pre>
+
+  <h3>容易混淆的三种"彩虹"</h3>
+  <table>
+    <tr><th>现象</th><th>含义</th></tr>
+    <tr><td>开机短暂全屏彩虹</td><td>正常现象：固件显示自检图，随后交给内核</td></tr>
+    <tr><td>永远停在彩虹屏</td><td>故障：固件找不到或无法启动内核（kernel 文件损坏/缺失、config.txt 指错文件等）</td></tr>
+    <tr><td>屏幕右上角小彩虹方块</td><td>旧固件的<strong>欠压警告</strong>（新固件改为闪电图标），与开机彩虹屏无关</td></tr>
+  </table>
+</section>
+
+<!-- ======================================================= -->
+<section id="customize">
+  <h2>四、想要自定义开机图片：从 TF 卡 boot 分区读取，哪种方式最方便？</h2>
+
+  <p>既然彩虹屏本体不可替换，思路就变为：<strong>关掉彩虹屏（<code>disable_splash=1</code>），
+  然后在启动链中尽早的、你可控的环节显示自己的图片</strong>。按出现时机从早到晚，共有四种方案：</p>
+
+  <h3>方案 A：U-Boot 显示 BMP（可直接读 boot 分区，最早的可定制画面）</h3>
+  <p>这正好回应了你的想法——<strong>U-Boot 可以直接从 TF 卡 FAT 分区读取图片文件并显示</strong>，
+  改图只需替换 boot 分区里的一个 BMP，无需重新编译任何东西：</p>
+<pre><code># 编译 U-Boot 时启用（rpi_arm64_defconfig 基础上）：
+#   CONFIG_VIDEO=y  CONFIG_CMD_BMP=y  CONFIG_SPLASH_SCREEN=y
+
+# config.txt 里：
+kernel=u-boot.bin
+disable_splash=1
+
+# U-Boot 环境（或 boot.scr 脚本）里：
+fatload mmc 0:1 ${loadaddr} splash.bmp
+bmp display ${loadaddr} m m        # m m = 水平垂直居中
+# 也可用 splashimage / splashfile / splashpos 环境变量自动显示</code></pre>
+  <p class="muted">注意：图片须为未压缩的 BMP（建议 24 位或 8 位）；且这要求你本来就打算用 U-Boot，
+  否则单为一张图引入 U-Boot 有点重。</p>
+
+  <h3>方案 B：initramfs / systemd 早期用 fbi 画图（不用 U-Boot 也能"读 boot 分区"）</h3>
+  <p>把图片放在 boot 分区（FAT，插到任何电脑上都能改），内核起来后第一时间用
+  framebuffer 工具显示它。出现时机约在上电后 3–5 秒：</p>
+<pre><code># 图片放到 /boot/firmware/splash.png
+sudo apt install fbi
+
+# /etc/systemd/system/splashscreen.service
+[Unit]
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+ExecStart=/usr/bin/fbi -d /dev/fb0 --noverbose -a /boot/firmware/splash.png
+StandardInput=tty
+StandardOutput=tty
+
+[Install]
+WantedBy=sysinit.target</code></pre>
+  <p class="muted">配合 <code>cmdline.txt</code> 加 <code>quiet logo.nologo</code> 隐藏内核日志和小树莓 logo 效果更佳。</p>
+
+  <h3>方案 C：Plymouth 主题（Raspberry Pi OS 官方方式，最省事）</h3>
+  <p>Raspberry Pi OS 桌面版自带 Plymouth，开机画面用的是 <code>pix</code> 主题，直接替换其中一张 PNG 即可：</p>
+<pre><code>sudo cp my-splash.png /usr/share/plymouth/themes/pix/splash.png
+sudo update-initramfs -u     # 若启用了 initramfs 则需刷新</code></pre>
+  <p class="muted">缺点：图片在 ext4 根分区而不是 boot 分区，且出现时机比方案 B 稍晚。</p>
+
+  <h3>方案 D：替换内核内置 logo（不推荐）</h3>
+  <p>内核启动时角落的小树莓是编译进内核的 <code>CONFIG_LOGO</code>（<code>logo_linux_clut224.ppm</code>），
+  改它必须重新编译内核，改一次图重编一次，最不方便。</p>
+
+  <h3>怎么选？</h3>
+  <table>
+    <tr><th>方案</th><th>图片位置</th><th>出现时机</th><th>改图成本</th><th>推荐场景</th></tr>
+    <tr><td>A：U-Boot BMP</td><td><strong>boot 分区（FAT）</strong></td><td>最早（内核之前）</td><td>替换 BMP 即可</td><td>本来就用 U-Boot 的产品化设备</td></tr>
+    <tr><td>B：fbi + boot 分区图片</td><td><strong>boot 分区（FAT）</strong></td><td>内核起来后 ~3–5 秒</td><td>替换 PNG 即可</td><td><strong>不想引入 U-Boot 时的最方便方案</strong></td></tr>
+    <tr><td>C：Plymouth</td><td>根分区</td><td>稍晚于 B</td><td>替换 PNG（可能需刷 initramfs）</td><td>Raspberry Pi OS 桌面版日常定制</td></tr>
+    <tr><td>D：内核 logo</td><td>编译进内核</td><td>内核早期</td><td>需重编内核</td><td>基本不推荐</td></tr>
+  </table>
+
+  <div class="callout ok">
+    <span class="title">结论</span>
+    "彩虹屏那张图"改不了（闭源固件运行时生成，无对应文件），只能用 <code>disable_splash=1</code> 关掉。
+    如果你已经在用 U-Boot，方案 A 完全满足"直接读 TF 卡 boot 分区里的图片"的需求；
+    如果不用 U-Boot，<strong>方案 B（图片放 boot 分区 + fbi 显示）是综合最方便的选择</strong>——
+    图片在 FAT 分区、任何电脑都能替换，也不需要重编译任何组件。
+    在 pi-gen 中落地时：<code>disable_splash=1</code> 加进 <code>stage1/00-boot-files/files/config.txt</code>，
+    splash 图片与 systemd 服务可以做成一个自定义 stage 安装进镜像。
+  </div>
+</section>
+
+</main>
+
+<footer>
+  基于 Raspberry Pi 官方文档（Boot flow / config.txt / EEPROM bootloader）与 U-Boot 文档整理 · 2026-08
+</footer>
+
+</body>
+</html>
