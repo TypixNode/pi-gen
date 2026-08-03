@@ -1,0 +1,119 @@
+name: Build slim desktop image
+
+# Builds the arm64 Raspberry Pi OS desktop image that config-slim-desktop trims
+# to fit 4GB storage. The default runner is arm64, so the build is native and
+# does not go through qemu.
+
+on:
+  workflow_dispatch:
+    inputs:
+      session:
+        description: Desktop session
+        type: choice
+        options: [wayland, x11, both]
+        default: wayland
+      browser:
+        description: Browser (chromium ~360MB, firefox ~280MB, none)
+        type: choice
+        options: [chromium, firefox, none]
+        default: chromium
+      extra_packages:
+        description: Extra packages, space separated (e.g. "fonts-noto-cjk vlc")
+        type: string
+        default: ''
+      locale:
+        description: Default locale, also the translations kept in the image
+        type: string
+        default: en_GB.UTF-8
+      timezone:
+        description: Default timezone
+        type: string
+        default: Europe/London
+      compression:
+        description: Image compression
+        type: choice
+        options: [xz, zip, gz, none]
+        default: xz
+  push:
+    tags:
+      - 'slim-desktop-v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache /usr/local/share/boost || true
+          df -h
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            coreutils quilt parted qemu-user-binfmt debootstrap zerofree zip \
+            dosfstools e2fsprogs libarchive-tools libcap2-bin grep rsync \
+            xz-utils file git curl bc gpg pigz xxd arch-test bmap-tools kmod
+
+      - name: Build image
+        run: |
+          # The largest disk on a GitHub runner is the ephemeral one; the stage
+          # rootfs copies and the image together need well over 10GB.
+          if [ -d /mnt ] && [ "$(df --output=avail /mnt | tail -1)" -gt 20000000 ]; then
+            sudo install -d -o "$(id -u)" -g "$(id -g)" /mnt/pi-gen-work
+            export WORK_DIR=/mnt/pi-gen-work
+          fi
+          # Only the desktop image is wanted, not the Lite one stage2 exports.
+          touch stage2/SKIP_IMAGES
+          sudo -E ./build.sh -c config-slim-desktop
+        env:
+          SLIM_DESKTOP_SESSION: ${{ inputs.session || 'wayland' }}
+          SLIM_BROWSER: ${{ inputs.browser || 'chromium' }}
+          SLIM_EXTRA_PACKAGES: ${{ inputs.extra_packages }}
+          LOCALE_DEFAULT: ${{ inputs.locale || 'en_GB.UTF-8' }}
+          TIMEZONE_DEFAULT: ${{ inputs.timezone || 'Europe/London' }}
+          DEPLOY_COMPRESSION: ${{ inputs.compression || 'xz' }}
+
+      - name: Report image size
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" deploy
+          {
+            echo '### Slim desktop image'
+            echo
+            echo '| File | Size |'
+            echo '| --- | --- |'
+            for f in deploy/*; do
+              printf '| `%s` | %s |\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+            done
+            echo
+            echo "A 4GB eMMC module holds about 3.9 GB, so the uncompressed image"
+            echo "has to stay below that; the root filesystem grows to fill the"
+            echo "module on first boot."
+          } >> "$GITHUB_STEP_SUMMARY"
+          ls -l deploy
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raspios-slim-desktop-arm64
+          path: |
+            deploy/*.img*
+            deploy/*.zip
+            deploy/*.info
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/slim-desktop-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Raspberry Pi OS slim desktop ${GITHUB_REF_NAME}" \
+            --notes "arm64 desktop image trimmed to fit 4GB storage, built from \`config-slim-desktop\`." \
+            deploy/*
