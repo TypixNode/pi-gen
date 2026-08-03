@@ -7,8 +7,8 @@
 # stage5 with stage-slim-desktop, which trims the Lite rootfs and then installs
 # the Raspberry Pi Desktop from the individual packages behind the rpd-* meta-
 # packages instead of the metapackages themselves. The result is roughly a
-# 3.2GB image that leaves about 1.2GB free once the root filesystem has grown
-# to fill the module on first boot.
+# 3.0GB image that leaves about 1GB free once the root filesystem has grown to
+# fill the module on first boot.
 #
 # Add `touch stage2/SKIP_IMAGES` if you do not also want the Lite image.
 
@@ -63,9 +63,13 @@ export SLIM_KEEP_FIRMWARE="${SLIM_KEEP_FIRMWARE-firmware-brcm80211}"
 
 # The kernel flavour to keep. rpi-v8 boots BCM2837 (Compute Module 3, Pi 3) and
 # BCM2711 (Compute Module 4, Pi 4); rpi-2712 is Raspberry Pi 5 only. Dropping the
-# other flavour and all the kernel headers is ~245MB, most of it the
-# cross-toolchain the headers pull in.
+# flavour that cannot boot the target, its modules and its headers is ~90MB.
 export SLIM_KEEP_KERNEL="${SLIM_KEEP_KERNEL:-rpi-v8}"
+
+# Keep build-essential, gdb and the headers for the kernel above, so that
+# out-of-tree kernel modules can still be built on the device. Set to 0 to
+# reclaim the ~250MB they occupy.
+export SLIM_KEEP_TOOLCHAIN="${SLIM_KEEP_TOOLCHAIN:-1}"
 
 # Anything extra you want in the image, installed with --no-install-recommends
 # together with the desktop. Some sizes worth knowing about:
