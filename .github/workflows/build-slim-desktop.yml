@@ -1,21 +1,15 @@
-name: Build image
+name: Build slim desktop image
 
-# Builds a Raspberry Pi OS image on a native arm64 runner, so the build does not
-# go through qemu. `slim-desktop` is the desktop trimmed to fit 4GB storage by
-# config-slim-desktop; the other variants are stock pi-gen.
+# The desktop image config-slim-desktop trims to fit 4GB storage, such as a
+# Compute Module 3's eMMC.
 #
-# A push builds slim-desktop and moves the slim-desktop-latest OS list onto it.
-# A manual run publishes its build release and leaves the OS list alone - add it
+# A push builds it and moves the published OS list onto the result. A manual run
+# publishes its build release and leaves the OS list alone; add it to the list
 # with the "Append to OS list" workflow when you want Imager to offer it.
 
 on:
   workflow_dispatch:
     inputs:
-      variant:
-        description: What to build
-        type: choice
-        options: [slim-desktop, lite, desktop, full]
-        default: slim-desktop
       ref:
         description: Branch, tag or SHA to build (blank = the one selected above)
         type: string
@@ -62,321 +56,28 @@ on:
       - 'export-image/**'
       - 'scripts/**'
       - 'build.sh'
+      - '.github/workflows/build-image.yml'
       - '.github/workflows/build-slim-desktop.yml'
 
-# A build takes tens of minutes; only the newest commit on a branch is worth one.
+# A build takes minutes; only the newest commit on a branch is worth one.
 concurrency:
   group: slim-desktop-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 240
     permissions:
       contents: write
-    env:
-      SLIM_DESKTOP_SESSION: ${{ inputs.session || 'wayland' }}
-      SLIM_BROWSER: ${{ inputs.browser || 'chromium' }}
-      SLIM_EXTRA_PACKAGES: ${{ inputs.extra_packages }}
-      SLIM_KEEP_TOOLCHAIN: ${{ (github.event_name != 'workflow_dispatch' || inputs.keep_toolchain) && '1' || '0' }}
-      SLIM_RPI_CONNECT: '1'
-      LOCALE_DEFAULT: ${{ inputs.locale || 'en_GB.UTF-8' }}
-      TIMEZONE_DEFAULT: ${{ inputs.timezone || 'Europe/London' }}
-      DEPLOY_COMPRESSION: ${{ inputs.compression || 'xz' }}
-      BUILD_VARIANT: ${{ inputs.variant || 'slim-desktop' }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-
-      - name: Show the runner
-        run: |
-          uname -a
-          nproc
-          free -h
-          df -h
-          dpkg --print-architecture
-
-      - name: Reclaim runner disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/share/boost || true
-          df -h
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            coreutils quilt parted qemu-user-binfmt debootstrap zerofree zip \
-            dosfstools e2fsprogs libarchive-tools libcap2-bin grep rsync \
-            xz-utils file git curl bc gpg pigz xxd arch-test bmap-tools kmod
-
-      - name: Choose a work directory
-        run: |
-          # The stage rootfs copies and the image together need well over 10GB.
-          # Prefer the runner's ephemeral disk when it is the larger one.
-          dir="$PWD/work"
-          if [ -d /mnt ] && [ "$(df --output=avail /mnt | tail -1)" -gt 20000000 ]; then
-            sudo install -d -o "$(id -u)" -g "$(id -g)" /mnt/pi-gen-work
-            dir=/mnt/pi-gen-work
-          fi
-          echo "WORK_DIR=$dir" >> "$GITHUB_ENV"
-
-      - name: Build image
-        run: |
-          # Every variant is arranged to export exactly one image, so that the
-          # later steps have one thing to verify and publish.
-          case "$BUILD_VARIANT" in
-          slim-desktop)
-            if [ ! -f config-slim-desktop ]; then
-              echo "config-slim-desktop is not in this ref; pick another variant" >&2
-              exit 1
-            fi
-            touch stage2/SKIP_IMAGES
-            sudo -E ./build.sh -c config-slim-desktop
-            ;;
-          lite)
-            touch stage3/SKIP stage4/SKIP stage5/SKIP
-            touch stage4/SKIP_IMAGES stage5/SKIP_IMAGES
-            sudo -E ./build.sh
-            ;;
-          desktop)
-            touch stage5/SKIP
-            touch stage2/SKIP_IMAGES stage5/SKIP_IMAGES
-            sudo -E ./build.sh
-            ;;
-          full)
-            touch stage2/SKIP_IMAGES stage4/SKIP_IMAGES
-            sudo -E ./build.sh
-            ;;
-          *)
-            echo "unknown variant: $BUILD_VARIANT" >&2
-            exit 1
-            ;;
-          esac
-
-      - name: Verify the image
-        env:
-          # A 4GB eMMC module reports a little under 4 x 10^9 bytes, and Imager
-          # refuses anything larger than the target.
-          TARGET_STORAGE_BYTES: '3900000000'
-          EXPECTED_SESSION: ${{ inputs.session == 'x11' && 'rpd-x' || 'rpd-labwc' }}
-        run: |
-          IMG="$(ls "$WORK_DIR"/export-image/*.img)"
-          if [ "$BUILD_VARIANT" = slim-desktop ]; then
-            sudo -E REPORT_FILE=image-report.env ./scripts/verify-slim-image "$IMG"
-            # shellcheck disable=SC1091
-            . ./image-report.env
-            {
-              echo '### Slim desktop image'
-              echo
-              printf 'Uncompressed image: **%s** (%s bytes)\n\n' \
-                "$(numfmt --to=si --suffix=B "$IMAGE_SIZE")" "$IMAGE_SIZE"
-              printf 'Root filesystem: %s used, %s free inside the image. It grows to fill the storage on first boot, which on a 4GB eMMC module leaves at least %s free.\n\n' \
-                "$(numfmt --to=si --suffix=B "$ROOT_USED")" \
-                "$(numfmt --to=si --suffix=B "$ROOT_AVAIL")" \
-                "$(numfmt --to=si --suffix=B "$((TARGET_STORAGE_BYTES - BOOT_PART_SIZE - 8388608 - ROOT_FOOTPRINT))")"
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            # The stock variants make no promise about fitting small storage, so
-            # there is nothing to assert; report what came out.
-            sudo parted -s "$IMG" unit B print
-            SIZE="$(stat -c %s "$IMG")"
-            printf '### %s image\n\nUncompressed image: **%s** (%s bytes)\n\n' \
-              "$BUILD_VARIANT" "$(numfmt --to=si --suffix=B "$SIZE")" "$SIZE" \
-              >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Assemble the release
-        run: |
-          sudo chown -R "$(id -u):$(id -g)" deploy
-          # Every build gets its own release, and its image asset is never
-          # replaced. Imager verifies the image against the hash it read from the
-          # OS list, so an image URL whose contents change breaks every OS list
-          # that has already been fetched and cached - the pointer release below
-          # is what moves instead.
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            BUILD_TAG="$GITHUB_REF_NAME"
-          else
-            BUILD_TAG="$BUILD_VARIANT-build-$(date -u +%Y%m%d)-${GITHUB_SHA:0:7}"
-          fi
-          echo "BUILD_TAG=$BUILD_TAG" >> "$GITHUB_ENV"
-          echo "POINTER_TAG=slim-desktop-latest" >> "$GITHUB_ENV"
-
-          ARCHIVE="$(ls deploy/image_*.img.xz deploy/image_*.img.gz deploy/image_*.zip \
-            deploy/*.img 2>/dev/null | head -1)"
-          # Drop pi-gen's "image_" prefix and build date, leaving a name that is
-          # the same in every build release and so predictable in an OS list.
-          BASE="$(basename "$ARCHIVE")"
-          BASE="${BASE#image_}"
-          ASSET="$(echo "$BASE" | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}-//')"
-          STEM="${ASSET%%.img*}"
-          STEM="${STEM%.zip}"
-
-          mkdir -p release
-          cp "$ARCHIVE" "release/$ASSET"
-          for f in deploy/*.bmap; do
-            if [ -e "$f" ]; then cp "$f" "release/$STEM.bmap"; fi
-          done
-          for f in deploy/*.info; do
-            if [ -e "$f" ]; then cp "$f" "release/$STEM.info"; fi
-          done
-
-          if [ "$BUILD_VARIANT" = slim-desktop ]; then
-            ./scripts/make-os-list-json \
-              --image "$WORK_DIR"/export-image/*.img \
-              --archive "release/$ASSET" \
-              --url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$BUILD_TAG/$ASSET" \
-              --release-date "$(date -u +%Y-%m-%d)" \
-              --devices pi4-64bit,pi3-64bit \
-              --capabilities "$([ "$SLIM_RPI_CONNECT" = 1 ] && echo rpi_connect || echo '')" \
-              --website "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
-              --output release/os_list.json
-          fi
-
-          ( cd release && sha256sum ./* > sha256sums.txt )
-          ls -l release
-          if [ -f release/os_list.json ]; then cat release/os_list.json; fi
-
-      - name: Publish the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          # A push keeps the published OS list current; a manual build is left for
-          # the "Append to OS list" workflow to add deliberately.
-          MOVE_POINTER: ${{ github.event_name == 'push' && (inputs.variant || 'slim-desktop') == 'slim-desktop' }}
-        run: |
-          BUILD_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$BUILD_TAG"
-          POINTER_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$POINTER_TAG"
-          {
-            if [ "$BUILD_VARIANT" = slim-desktop ]; then
-              echo 'arm64 Raspberry Pi OS with the desktop, trimmed to fit 4GB storage'
-              echo '(Compute Module 3 and up), built from `config-slim-desktop`.'
-            else
-              echo "Stock pi-gen \`$BUILD_VARIANT\` image, built from \`${GITHUB_REF_NAME}\`."
-            fi
-            echo
-            echo '## Raspberry Pi Imager'
-            echo
-            if [ -f release/os_list.json ]; then
-              echo 'To pin this build, whose image and checksums will never change:'
-              echo
-              echo '```'
-              echo "rpi-imager --repo $BUILD_URL/os_list.json"
-              echo '```'
-              echo
-              if [ "$MOVE_POINTER" = true ]; then
-                echo 'To follow the newest build:'
-                echo
-                echo '```'
-                echo "rpi-imager --repo $POINTER_URL/os_list.json"
-                echo '```'
-                echo
-              fi
-              echo 'Hostname, username and password, SSH keys, Wi-Fi credentials,'
-              echo 'locale and Raspberry Pi Connect are applied through cloud-init,'
-              echo 'the same mechanism the stock Trixie images use'
-              echo '(`init_format: cloudinit-rpi`).'
-            else
-              echo 'Run the "Append to OS list" workflow with this tag to add the'
-              echo 'image to an OS list Imager can be pointed at.'
-            fi
-            echo
-            echo '## Files'
-            echo
-            echo '| File | Size |'
-            echo '| --- | --- |'
-            for f in release/*; do
-              printf '| `%s` | %s |\n' "$(basename "$f")" \
-                "$(numfmt --to=iec --suffix=B "$(stat -c %s "$f")")"
-            done
-          } > release-notes.md
-
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            PRERELEASE=
-          else
-            PRERELEASE=--prerelease
-          fi
-          if ! gh release view "$BUILD_TAG" >/dev/null 2>&1; then
-            gh release create "$BUILD_TAG" $PRERELEASE --target "$GITHUB_SHA" \
-              --title "Raspberry Pi OS $BUILD_VARIANT $BUILD_TAG" \
-              --notes-file release-notes.md
-          fi
-          # --clobber only ever replaces assets of a re-run of this same commit.
-          gh release upload "$BUILD_TAG" release/* --clobber
-
-          # The pointer release carries nothing but the OS list, so a copy of it
-          # that Imager or a CDN has cached still names an image that exists and
-          # still matches the hashes it was published with.
-          if [ "$MOVE_POINTER" = true ]; then
-            {
-              echo 'OS list for Raspberry Pi Imager, pointing at the newest build.'
-              echo
-              echo '```'
-              echo "rpi-imager --repo $POINTER_URL/os_list.json"
-              echo '```'
-              echo
-              echo "Currently: [$BUILD_TAG]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$BUILD_TAG)"
-            } > pointer-notes.md
-            if gh release view "$POINTER_TAG" >/dev/null 2>&1; then
-              gh release edit "$POINTER_TAG" --notes-file pointer-notes.md
-            else
-              gh release create "$POINTER_TAG" --prerelease --target "$GITHUB_SHA" \
-                --title "Raspberry Pi OS slim desktop (OS list for the newest build)" \
-                --notes-file pointer-notes.md
-            fi
-            gh release upload "$POINTER_TAG" release/os_list.json --clobber
-            # Nothing else belongs here: an image served from a URL that later
-            # changes is what broke hash verification in the first place.
-            gh release view "$POINTER_TAG" --json assets \
-              --jq '.assets[].name | select(. != "os_list.json")' |
-            while read -r extra; do
-              [ -n "$extra" ] || continue
-              echo "removing $extra from $POINTER_TAG"
-              gh release delete-asset "$POINTER_TAG" "$extra" --yes
-            done
-          fi
-
-          {
-            echo
-            echo "Build release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$BUILD_TAG"
-            if [ -f release/os_list.json ]; then
-              echo
-              echo 'Add to Raspberry Pi Imager:'
-              echo
-              echo '```'
-              if [ "$MOVE_POINTER" = true ]; then
-                echo "rpi-imager --repo $POINTER_URL/os_list.json"
-              else
-                echo "rpi-imager --repo $BUILD_URL/os_list.json"
-              fi
-              echo '```'
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Prune superseded build releases
-        if: github.ref_type != 'tag'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Keep a few builds so that an OS list fetched a while ago still
-          # resolves; beyond that a stale list gets an honest 404 rather than
-          # silently pointing at different bytes.
-          gh release list --limit 100 --json tagName,createdAt \
-            --jq "[.[] | select(.tagName | startswith(\"$BUILD_VARIANT-build-\"))]
-                  | sort_by(.createdAt) | reverse | .[5:] | .[].tagName" |
-          while read -r old; do
-            [ -n "$old" ] || continue
-            echo "deleting superseded $old"
-            gh release delete "$old" --yes --cleanup-tag
-          done
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ inputs.variant || 'slim-desktop' }}-metadata
-          path: |
-            release/os_list.json
-            release/sha256sums.txt
-            release/*.bmap
-            release/*.info
-          if-no-files-found: error
+    uses: ./.github/workflows/build-image.yml
+    with:
+      variant: slim-desktop
+      ref: ${{ inputs.ref || '' }}
+      # Only an automatic build keeps the published OS list current.
+      move_pointer: ${{ github.event_name == 'push' }}
+      session: ${{ inputs.session || 'wayland' }}
+      browser: ${{ inputs.browser || 'chromium' }}
+      extra_packages: ${{ inputs.extra_packages || '' }}
+      keep_toolchain: ${{ github.event_name != 'workflow_dispatch' || inputs.keep_toolchain }}
+      locale: ${{ inputs.locale || 'en_GB.UTF-8' }}
+      timezone: ${{ inputs.timezone || 'Europe/London' }}
+      compression: ${{ inputs.compression || 'xz' }}
