@@ -443,12 +443,21 @@ in `config-slim-desktop`.
 
 The `Build slim desktop image` GitHub Actions workflow builds the same image on a
 native arm64 runner; the session, the browser and the extra packages are workflow
-inputs. It publishes the image to a GitHub release together with an
-`os_list.json` that Raspberry Pi Imager can be pointed at:
+inputs. Each build gets its own release, whose image asset is never replaced, and
+the `slim-desktop-latest` release carries only an `os_list.json` pointing at the
+newest one. Raspberry Pi Imager can be pointed at either:
 
 ```bash
+# follow the newest build
 rpi-imager --repo https://github.com/<owner>/pi-gen/releases/download/slim-desktop-latest/os_list.json
+# or pin one build
+rpi-imager --repo https://github.com/<owner>/pi-gen/releases/download/slim-desktop-build-<date>-<sha>/os_list.json
 ```
+
+Keeping the image immutable is what makes this work: Imager checks the image
+against the `extract_sha256` it read from the OS list, so serving a new image
+from a URL an old OS list already names would make every cached copy of that
+list report a corrupt download.
 
 `scripts/make-os-list-json` writes that file from the built image, so its sizes
 and checksums always describe what was published. Two of its fields have to match
