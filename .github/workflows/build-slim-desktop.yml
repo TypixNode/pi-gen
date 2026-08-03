@@ -84,7 +84,7 @@ jobs:
       LOCALE_DEFAULT: ${{ inputs.locale || 'en_GB.UTF-8' }}
       TIMEZONE_DEFAULT: ${{ inputs.timezone || 'Europe/London' }}
       DEPLOY_COMPRESSION: ${{ inputs.compression || 'xz' }}
-      VARIANT: ${{ inputs.variant || 'slim-desktop' }}
+      BUILD_VARIANT: ${{ inputs.variant || 'slim-desktop' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -127,7 +127,7 @@ jobs:
         run: |
           # Every variant is arranged to export exactly one image, so that the
           # later steps have one thing to verify and publish.
-          case "$VARIANT" in
+          case "$BUILD_VARIANT" in
           slim-desktop)
             if [ ! -f config-slim-desktop ]; then
               echo "config-slim-desktop is not in this ref; pick another variant" >&2
@@ -151,7 +151,7 @@ jobs:
             sudo -E ./build.sh
             ;;
           *)
-            echo "unknown variant: $VARIANT" >&2
+            echo "unknown variant: $BUILD_VARIANT" >&2
             exit 1
             ;;
           esac
@@ -164,7 +164,7 @@ jobs:
           EXPECTED_SESSION: ${{ inputs.session == 'x11' && 'rpd-x' || 'rpd-labwc' }}
         run: |
           IMG="$(ls "$WORK_DIR"/export-image/*.img)"
-          if [ "$VARIANT" = slim-desktop ]; then
+          if [ "$BUILD_VARIANT" = slim-desktop ]; then
             sudo -E REPORT_FILE=image-report.env ./scripts/verify-slim-image "$IMG"
             # shellcheck disable=SC1091
             . ./image-report.env
@@ -184,7 +184,7 @@ jobs:
             sudo parted -s "$IMG" unit B print
             SIZE="$(stat -c %s "$IMG")"
             printf '### %s image\n\nUncompressed image: **%s** (%s bytes)\n\n' \
-              "$VARIANT" "$(numfmt --to=si --suffix=B "$SIZE")" "$SIZE" \
+              "$BUILD_VARIANT" "$(numfmt --to=si --suffix=B "$SIZE")" "$SIZE" \
               >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -199,7 +199,7 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             BUILD_TAG="$GITHUB_REF_NAME"
           else
-            BUILD_TAG="$VARIANT-build-$(date -u +%Y%m%d)-${GITHUB_SHA:0:7}"
+            BUILD_TAG="$BUILD_VARIANT-build-$(date -u +%Y%m%d)-${GITHUB_SHA:0:7}"
           fi
           echo "BUILD_TAG=$BUILD_TAG" >> "$GITHUB_ENV"
           echo "POINTER_TAG=slim-desktop-latest" >> "$GITHUB_ENV"
@@ -223,7 +223,7 @@ jobs:
             if [ -e "$f" ]; then cp "$f" "release/$STEM.info"; fi
           done
 
-          if [ "$VARIANT" = slim-desktop ]; then
+          if [ "$BUILD_VARIANT" = slim-desktop ]; then
             ./scripts/make-os-list-json \
               --image "$WORK_DIR"/export-image/*.img \
               --archive "release/$ASSET" \
@@ -249,11 +249,11 @@ jobs:
           BUILD_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$BUILD_TAG"
           POINTER_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$POINTER_TAG"
           {
-            if [ "$VARIANT" = slim-desktop ]; then
+            if [ "$BUILD_VARIANT" = slim-desktop ]; then
               echo 'arm64 Raspberry Pi OS with the desktop, trimmed to fit 4GB storage'
               echo '(Compute Module 3 and up), built from `config-slim-desktop`.'
             else
-              echo "Stock pi-gen \`$VARIANT\` image, built from \`${GITHUB_REF_NAME}\`."
+              echo "Stock pi-gen \`$BUILD_VARIANT\` image, built from \`${GITHUB_REF_NAME}\`."
             fi
             echo
             echo '## Raspberry Pi Imager'
@@ -299,7 +299,7 @@ jobs:
           fi
           if ! gh release view "$BUILD_TAG" >/dev/null 2>&1; then
             gh release create "$BUILD_TAG" $PRERELEASE --target "$GITHUB_SHA" \
-              --title "Raspberry Pi OS $VARIANT $BUILD_TAG" \
+              --title "Raspberry Pi OS $BUILD_VARIANT $BUILD_TAG" \
               --notes-file release-notes.md
           fi
           # --clobber only ever replaces assets of a re-run of this same commit.
@@ -363,7 +363,7 @@ jobs:
           # resolves; beyond that a stale list gets an honest 404 rather than
           # silently pointing at different bytes.
           gh release list --limit 100 --json tagName,createdAt \
-            --jq "[.[] | select(.tagName | startswith(\"$VARIANT-build-\"))]
+            --jq "[.[] | select(.tagName | startswith(\"$BUILD_VARIANT-build-\"))]
                   | sort_by(.createdAt) | reverse | .[5:] | .[].tagName" |
           while read -r old; do
             [ -n "$old" ] || continue
