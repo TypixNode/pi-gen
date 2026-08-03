@@ -62,6 +62,14 @@ jobs:
     timeout-minutes: 240
     permissions:
       contents: write
+    env:
+      SLIM_DESKTOP_SESSION: ${{ inputs.session || 'wayland' }}
+      SLIM_BROWSER: ${{ inputs.browser || 'chromium' }}
+      SLIM_EXTRA_PACKAGES: ${{ inputs.extra_packages }}
+      SLIM_KEEP_TOOLCHAIN: ${{ (github.event_name != 'workflow_dispatch' || inputs.keep_toolchain) && '1' || '0' }}
+      LOCALE_DEFAULT: ${{ inputs.locale || 'en_GB.UTF-8' }}
+      TIMEZONE_DEFAULT: ${{ inputs.timezone || 'Europe/London' }}
+      DEPLOY_COMPRESSION: ${{ inputs.compression || 'xz' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -87,60 +95,97 @@ jobs:
             dosfstools e2fsprogs libarchive-tools libcap2-bin grep rsync \
             xz-utils file git curl bc gpg pigz xxd arch-test bmap-tools kmod
 
-      - name: Build image
+      - name: Choose a work directory
         run: |
-          # The largest disk on a GitHub runner is the ephemeral one; the stage
-          # rootfs copies and the image together need well over 10GB.
+          # The stage rootfs copies and the image together need well over 10GB.
+          # Prefer the runner's ephemeral disk when it is the larger one.
+          dir="$PWD/work"
           if [ -d /mnt ] && [ "$(df --output=avail /mnt | tail -1)" -gt 20000000 ]; then
             sudo install -d -o "$(id -u)" -g "$(id -g)" /mnt/pi-gen-work
-            export WORK_DIR=/mnt/pi-gen-work
+            dir=/mnt/pi-gen-work
           fi
+          echo "WORK_DIR=$dir" >> "$GITHUB_ENV"
+
+      - name: Build image
+        run: |
           # Only the desktop image is wanted, not the Lite one stage2 exports.
           touch stage2/SKIP_IMAGES
           sudo -E ./build.sh -c config-slim-desktop
-        env:
-          SLIM_DESKTOP_SESSION: ${{ inputs.session || 'wayland' }}
-          SLIM_BROWSER: ${{ inputs.browser || 'chromium' }}
-          SLIM_EXTRA_PACKAGES: ${{ inputs.extra_packages }}
-          SLIM_KEEP_TOOLCHAIN: ${{ (github.event_name != 'workflow_dispatch' || inputs.keep_toolchain) && '1' || '0' }}
-          LOCALE_DEFAULT: ${{ inputs.locale || 'en_GB.UTF-8' }}
-          TIMEZONE_DEFAULT: ${{ inputs.timezone || 'Europe/London' }}
-          DEPLOY_COMPRESSION: ${{ inputs.compression || 'xz' }}
 
-      - name: Report image size
+      - name: Verify the image
+        env:
+          # A 4GB eMMC module reports a little under 4 x 10^9 bytes, and
+          # rpi-imager refuses anything larger than the target.
+          TARGET_STORAGE_BYTES: '3900000000'
+          EXPECTED_SESSION: ${{ inputs.session == 'x11' && 'rpd-x' || 'rpd-labwc' }}
         run: |
-          sudo chown -R "$(id -u):$(id -g)" deploy
-          # The uncompressed size is what has to fit the storage, and it is what
-          # rpi-imager checks the target against.
-          written=0
-          for f in deploy/*.img.xz; do
-            [ -e "$f" ] || continue
-            written=$(xz --robot --list "$f" | awk '$1=="totals" {print $5}')
-          done
-          for f in deploy/*.img; do
-            [ -e "$f" ] && written=$(stat -c %s "$f")
-          done
+          IMG="$(ls "$WORK_DIR"/export-image/*.img)"
+          SIZE="$(stat -c %s "$IMG")"
+          sudo parted -s "$IMG" unit B print
+          LOOP="$(sudo losetup --show --find --partscan "$IMG")"
+          sudo partprobe "$LOOP" || true
+          sudo mkdir -p /tmp/img/boot /tmp/img/root
+          sudo mount -o ro "${LOOP}p1" /tmp/img/boot
+          sudo mount -o ro "${LOOP}p2" /tmp/img/root
+          df -h /tmp/img/boot /tmp/img/root
+
+          AVAIL="$(df -B1 --output=avail /tmp/img/root | tail -1)"
+          USED="$(df -B1 --output=used /tmp/img/root | tail -1)"
+          KERNELS="$(sudo ls /tmp/img/root/usr/lib/modules | wc -l)"
+          SESSION="$(sudo sed -n 's/^user-session=//p' /tmp/img/root/etc/lightdm/lightdm.conf)"
+
+          problems=0
+          check() {
+            if [ "$2" = 0 ]; then
+              echo "FAIL: $1"
+              problems=$((problems + 1))
+            else
+              echo "ok: $1"
+            fi
+          }
+          check "image is $SIZE bytes, target holds $TARGET_STORAGE_BYTES" \
+            "$([ "$SIZE" -le "$TARGET_STORAGE_BYTES" ] && echo 1 || echo 0)"
+          check "root filesystem has $AVAIL bytes free for export-image to work in" \
+            "$([ "$AVAIL" -ge 33554432 ] && echo 1 || echo 0)"
+          check "exactly one kernel flavour installed (found $KERNELS)" \
+            "$([ "$KERNELS" -eq 1 ] && echo 1 || echo 0)"
+          check "lightdm session is $EXPECTED_SESSION (found ${SESSION:-none})" \
+            "$([ "$SESSION" = "$EXPECTED_SESSION" ] && echo 1 || echo 0)"
+          check "boot partition carries a kernel and an initramfs" \
+            "$(sudo test -e /tmp/img/boot/kernel8.img && sudo test -e /tmp/img/boot/initramfs8 && echo 1 || echo 0)"
+          if [ "$SLIM_KEEP_TOOLCHAIN" = '1' ]; then
+            KVER="$(sudo ls /tmp/img/root/usr/lib/modules | head -1)"
+            check "kernel headers are usable for out-of-tree modules" \
+              "$(sudo test -e "/tmp/img/root/usr/lib/modules/$KVER/build/Makefile" && echo 1 || echo 0)"
+            check "a compiler is installed" \
+              "$(sudo test -x /tmp/img/root/usr/bin/gcc && echo 1 || echo 0)"
+          fi
+
           {
             echo '### Slim desktop image'
             echo
+            printf 'Uncompressed image: **%s** (%s bytes)\n\n' \
+              "$(numfmt --to=si --suffix=B "$SIZE")" "$SIZE"
+            printf 'Root filesystem: %s used, %s free inside the image. It grows to fill the storage on first boot, which on a 4GB eMMC module leaves about %s free.\n\n' \
+              "$(numfmt --to=si --suffix=B "$USED")" \
+              "$(numfmt --to=si --suffix=B "$AVAIL")" \
+              "$(numfmt --to=si --suffix=B "$((TARGET_STORAGE_BYTES - 276824064 - USED))")"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          sudo umount /tmp/img/boot /tmp/img/root
+          sudo losetup -d "$LOOP"
+          exit "$problems"
+
+      - name: List the artifacts
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" deploy
+          {
             echo '| File | Size |'
             echo '| --- | --- |'
             for f in deploy/*; do
-              printf '| `%s` | %s |\n' "$(basename "$f")" "$(numfmt --to=iec --suffix=B "$(stat -c %s "$f")")"
+              printf '| `%s` | %s |\n' "$(basename "$f")" \
+                "$(numfmt --to=iec --suffix=B "$(stat -c %s "$f")")"
             done
-            echo
-            if [ "$written" -gt 0 ]; then
-              printf 'Uncompressed image: **%s** (%s bytes)\n\n' \
-                "$(numfmt --to=si --suffix=B "$written")" "$written"
-              # 4GB eMMC modules report a little under 4 x 10^9 bytes.
-              if [ "$written" -le 3900000000 ]; then
-                echo 'Fits a 4GB eMMC module.'
-              else
-                echo ':warning: Too large for a 4GB eMMC module.'
-              fi
-              echo
-              echo 'The root filesystem grows to fill the storage on first boot.'
-            fi
           } >> "$GITHUB_STEP_SUMMARY"
           ls -l deploy
 
