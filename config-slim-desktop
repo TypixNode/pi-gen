@@ -1,0 +1,70 @@
+# Raspberry Pi OS with a desktop, trimmed to fit a 4GB eMMC (Compute Module 3).
+#
+#   sudo ./build.sh -c config-slim-desktop
+#
+# The stock desktop image is 6.5GB and the previous (Bookworm) one 6.2GB, so
+# neither can be written to a 4GB module. This configuration replaces stage3 to
+# stage5 with stage-slim-desktop, which trims the Lite rootfs and then installs
+# the Raspberry Pi Desktop from the individual packages behind the rpd-* meta-
+# packages instead of the metapackages themselves. The result is roughly a
+# 3.2GB image that leaves about 1.2GB free once the root filesystem has grown
+# to fill the module on first boot.
+#
+# Add `touch stage2/SKIP_IMAGES` if you do not also want the Lite image.
+
+IMG_NAME='raspios-slim-desktop'
+
+STAGE_LIST="stage0 stage1 stage2 stage-slim-desktop"
+
+# One kernel flavour and one Wi-Fi blob means the boot partition never gets
+# close to the 512MB the stock images reserve.
+BOOT_SIZE=$((256 * 1024 * 1024))
+
+# The root filesystem grows to fill the storage on first boot, so the image only
+# needs enough slack to be a valid filesystem rather than 20% + 200MB of it.
+ROOT_MARGIN_PERCENT=8
+ROOT_MARGIN_FIXED=$((120 * 1024 * 1024))
+
+# cloud-init and netplan are ~110MB of rootfs for a machine that is configured
+# from the desktop.
+ENABLE_CLOUD_INIT=0
+
+# --- stage-slim-desktop knobs -------------------------------------------------
+# These are read by the stage's scripts, which run as child processes, so they
+# have to be exported.
+
+# wayland (labwc, the Trixie default), x11 (openbox + lxpanel) or both.
+# Installing only one saves ~85MB.
+export SLIM_DESKTOP_SESSION=wayland
+
+# chromium, firefox or none. Either browser is by far the largest single item in
+# the image: chromium is ~360MB installed (without chromium-l10n) and firefox
+# ~280MB. `none` leaves ~360MB more free space.
+export SLIM_BROWSER=chromium
+
+# Drop /usr/share/doc, /usr/share/man, /usr/share/info and the translation
+# catalogues for every language except LOCALE_DEFAULT's.
+export SLIM_STRIP_DOCS=1
+
+# Keep apt's package indices compressed and skip the source cache.
+export SLIM_APT_TRIM=1
+
+# Wi-Fi/Bluetooth firmware to keep. BCM43438/43455 covers every Compute Module
+# and Raspberry Pi with onboard wireless; the other blobs are 220MB between
+# them. Set to an empty string on a module without wireless.
+export SLIM_KEEP_FIRMWARE="firmware-brcm80211"
+
+# Anything extra you want in the image, installed with --no-install-recommends
+# together with the desktop. Some sizes worth knowing about:
+#   fonts-noto-cjk       ~65MB   Chinese/Japanese/Korean rendering
+#   vlc                  ~110MB  media player
+#   thonny python3-picamera2  ~90MB   the usual Python teaching tools
+#   build-essential      ~80MB   compiler toolchain
+export SLIM_EXTRA_PACKAGES=""
+
+# The defaults for these live in stage-slim-desktop; override to reshape the
+# package selection without editing the stage.
+#export SLIM_PURGE_PACKAGES=""
+#export SLIM_THEME_PACKAGES=""
+#export SLIM_PREFS_PACKAGES=""
+#export SLIM_APP_PACKAGES=""
