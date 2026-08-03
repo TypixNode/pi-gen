@@ -1,0 +1,163 @@
+name: Append to OS list
+
+# Adds an image that has already been published in a release to the OS list
+# Raspberry Pi Imager reads, so that a manual build only shows up in Imager when
+# you ask for it.
+#
+# The sizes and checksums are measured from the published asset rather than taken
+# on trust: Imager checks the image it downloads against the extract_sha256 in the
+# list, and an entry whose numbers do not describe the bytes being served makes it
+# report a corrupt download.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release holding the image, e.g. slim-desktop-build-20260803-abc1234
+        type: string
+        required: true
+      asset:
+        description: Image asset in that release (blank = the only image in it)
+        type: string
+        default: ''
+      name:
+        description: Name shown in Imager. Reusing a name replaces that entry
+        type: string
+        required: true
+      description:
+        description: Second line shown in Imager
+        type: string
+        default: Raspberry Pi OS with the desktop, trimmed to fit 4GB storage
+      devices:
+        description: Device tags, comma separated (pi5-64bit, pi4-64bit, pi3-64bit, ...)
+        type: string
+        default: pi4-64bit,pi3-64bit
+      init_format:
+        description: How Imager applies the advanced options
+        type: choice
+        options: [cloudinit-rpi, cloudinit, systemd, none]
+        default: cloudinit-rpi
+      capabilities:
+        description: Extra Imager options, comma separated (blank for none)
+        type: string
+        default: rpi_connect
+      icon:
+        description: Icon URL (blank = the Raspberry Pi OS icon)
+        type: string
+        default: ''
+      release_date:
+        description: Release date, YYYY-MM-DD (blank = today)
+        type: string
+        default: ''
+      pointer_tag:
+        description: Release that holds the OS list
+        type: string
+        default: slim-desktop-latest
+
+concurrency:
+  group: os-list-${{ inputs.pointer_tag }}
+
+jobs:
+  append:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # Through the environment rather than interpolated into the scripts, so that
+      # a name with a quote in it stays a name.
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      POINTER_TAG: ${{ inputs.pointer_tag }}
+      ASSET_INPUT: ${{ inputs.asset }}
+      ENTRY_NAME: ${{ inputs.name }}
+      ENTRY_DESCRIPTION: ${{ inputs.description }}
+      ENTRY_DEVICES: ${{ inputs.devices }}
+      ENTRY_INIT_FORMAT: ${{ inputs.init_format }}
+      ENTRY_CAPABILITIES: ${{ inputs.capabilities }}
+      ENTRY_ICON: ${{ inputs.icon }}
+      ENTRY_RELEASE_DATE: ${{ inputs.release_date }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the image and the current OS list
+        run: |
+          ASSET="$ASSET_INPUT"
+          if [ -z "$ASSET" ]; then
+            ASSET="$(gh release view "$RELEASE_TAG" --json assets \
+              --jq '[.assets[].name | select(test("\\.(img|img\\.xz|img\\.gz|zip)$"))] | first')"
+            if [ -z "$ASSET" ] || [ "$ASSET" = null ]; then
+              echo "no image asset in $RELEASE_TAG" >&2
+              exit 1
+            fi
+            echo "using $ASSET"
+          fi
+          echo "ASSET=$ASSET" >> "$GITHUB_ENV"
+
+          mkdir -p work
+          gh release download "$RELEASE_TAG" --pattern "$ASSET" --dir work
+
+          # Start from the list already published so entries accumulate; the first
+          # run just starts a new one.
+          if gh release download "$POINTER_TAG" --pattern os_list.json --dir work; then
+            echo "merging into the existing list"
+          else
+            echo "no existing list at $POINTER_TAG, starting one"
+          fi
+
+      - name: Build the entry
+        run: |
+          RELEASE_DATE="$ENTRY_RELEASE_DATE"
+          if [ -z "$RELEASE_DATE" ]; then
+            RELEASE_DATE="$(date -u +%Y-%m-%d)"
+          fi
+          ICON_ARG=()
+          if [ -n "$ENTRY_ICON" ]; then
+            ICON_ARG=(--icon "$ENTRY_ICON")
+          fi
+          ./scripts/make-os-list-json \
+            --archive "work/$ASSET" \
+            --url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$ASSET" \
+            --name "$ENTRY_NAME" \
+            --description "$ENTRY_DESCRIPTION" \
+            --release-date "$RELEASE_DATE" \
+            --devices "$ENTRY_DEVICES" \
+            --capabilities "$ENTRY_CAPABILITIES" \
+            --init-format "$ENTRY_INIT_FORMAT" \
+            --website "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            "${ICON_ARG[@]}" \
+            --merge-into work/os_list.json \
+            --output os_list.json
+          cat os_list.json
+
+      - name: Publish the OS list
+        run: |
+          POINTER_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$POINTER_TAG"
+          {
+            echo 'OS list for Raspberry Pi Imager.'
+            echo
+            echo '```'
+            echo "rpi-imager --repo $POINTER_URL/os_list.json"
+            echo '```'
+            echo
+          } > notes.md
+          jq -r '
+            "| Image | Release | Uncompressed |",
+            "| --- | --- | --- |",
+            (.os_list[] | "| \(.name) | `\(.url | split("/download/")
+                             | if length > 1 then .[1] | split("/")[0] else "?" end)`"
+                        + " | \((.extract_size / 10000000 | round) / 100) GB |")
+          ' os_list.json >> notes.md
+
+          if gh release view "$POINTER_TAG" >/dev/null 2>&1; then
+            gh release edit "$POINTER_TAG" --notes-file notes.md
+          else
+            gh release create "$POINTER_TAG" --prerelease \
+              --title "Raspberry Pi OS images (OS list for Imager)" --notes-file notes.md
+          fi
+          gh release upload "$POINTER_TAG" os_list.json --clobber
+
+          {
+            echo '### OS list updated'
+            echo
+            cat notes.md
+          } >> "$GITHUB_STEP_SUMMARY"
