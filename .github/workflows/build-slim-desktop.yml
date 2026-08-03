@@ -1,12 +1,25 @@
-name: Build slim desktop image
+name: Build image
 
-# Builds the arm64 Raspberry Pi OS desktop image that config-slim-desktop trims
-# to fit 4GB storage. The default runner is arm64, so the build is native and
-# does not go through qemu.
+# Builds a Raspberry Pi OS image on a native arm64 runner, so the build does not
+# go through qemu. `slim-desktop` is the desktop trimmed to fit 4GB storage by
+# config-slim-desktop; the other variants are stock pi-gen.
+#
+# A push builds slim-desktop and moves the slim-desktop-latest OS list onto it.
+# A manual run publishes its build release and leaves the OS list alone - add it
+# with the "Append to OS list" workflow when you want Imager to offer it.
 
 on:
   workflow_dispatch:
     inputs:
+      variant:
+        description: What to build
+        type: choice
+        options: [slim-desktop, lite, desktop, full]
+        default: slim-desktop
+      ref:
+        description: Branch, tag or SHA to build (blank = the one selected above)
+        type: string
+        default: ''
       session:
         description: Desktop session
         type: choice
@@ -71,8 +84,11 @@ jobs:
       LOCALE_DEFAULT: ${{ inputs.locale || 'en_GB.UTF-8' }}
       TIMEZONE_DEFAULT: ${{ inputs.timezone || 'Europe/London' }}
       DEPLOY_COMPRESSION: ${{ inputs.compression || 'xz' }}
+      VARIANT: ${{ inputs.variant || 'slim-desktop' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Show the runner
         run: |
@@ -109,103 +125,68 @@ jobs:
 
       - name: Build image
         run: |
-          # Only the desktop image is wanted, not the Lite one stage2 exports.
-          touch stage2/SKIP_IMAGES
-          sudo -E ./build.sh -c config-slim-desktop
+          # Every variant is arranged to export exactly one image, so that the
+          # later steps have one thing to verify and publish.
+          case "$VARIANT" in
+          slim-desktop)
+            if [ ! -f config-slim-desktop ]; then
+              echo "config-slim-desktop is not in this ref; pick another variant" >&2
+              exit 1
+            fi
+            touch stage2/SKIP_IMAGES
+            sudo -E ./build.sh -c config-slim-desktop
+            ;;
+          lite)
+            touch stage3/SKIP stage4/SKIP stage5/SKIP
+            touch stage4/SKIP_IMAGES stage5/SKIP_IMAGES
+            sudo -E ./build.sh
+            ;;
+          desktop)
+            touch stage5/SKIP
+            touch stage2/SKIP_IMAGES stage5/SKIP_IMAGES
+            sudo -E ./build.sh
+            ;;
+          full)
+            touch stage2/SKIP_IMAGES stage4/SKIP_IMAGES
+            sudo -E ./build.sh
+            ;;
+          *)
+            echo "unknown variant: $VARIANT" >&2
+            exit 1
+            ;;
+          esac
 
       - name: Verify the image
         env:
-          # A 4GB eMMC module reports a little under 4 x 10^9 bytes, and
-          # rpi-imager refuses anything larger than the target.
+          # A 4GB eMMC module reports a little under 4 x 10^9 bytes, and Imager
+          # refuses anything larger than the target.
           TARGET_STORAGE_BYTES: '3900000000'
           EXPECTED_SESSION: ${{ inputs.session == 'x11' && 'rpd-x' || 'rpd-labwc' }}
         run: |
           IMG="$(ls "$WORK_DIR"/export-image/*.img)"
-          SIZE="$(stat -c %s "$IMG")"
-          sudo parted -s "$IMG" unit B print
-          LOOP="$(sudo losetup --show --find --partscan "$IMG")"
-          sudo partprobe "$LOOP" || true
-          sudo mkdir -p /tmp/img/boot /tmp/img/root
-          sudo mount -o ro "${LOOP}p1" /tmp/img/boot
-          sudo mount -o ro "${LOOP}p2" /tmp/img/root
-          df -h /tmp/img/boot /tmp/img/root
-
-          AVAIL="$(df -B1 --output=avail /tmp/img/root | tail -1)"
-          USED="$(df -B1 --output=used /tmp/img/root | tail -1)"
-          PART_SIZE="$(sudo blockdev --getsize64 "${LOOP}p2")"
-          # Everything the filesystem is not offering to a normal user: the data,
-          # its metadata, and the 5% ext4 keeps back for root. Counting all of it
-          # as spoken for makes the estimate below a floor rather than a guess.
-          FOOTPRINT=$((PART_SIZE - AVAIL))
-          KERNELS="$(sudo ls /tmp/img/root/usr/lib/modules | wc -l)"
-          SESSION="$(sudo sed -n 's/^user-session=//p' /tmp/img/root/etc/lightdm/lightdm.conf)"
-
-          problems=0
-          check() {
-            if [ "$2" = 0 ]; then
-              echo "FAIL: $1"
-              problems=$((problems + 1))
-            else
-              echo "ok: $1"
-            fi
-          }
-          check "image is $SIZE bytes, target holds $TARGET_STORAGE_BYTES" \
-            "$([ "$SIZE" -le "$TARGET_STORAGE_BYTES" ] && echo 1 || echo 0)"
-          check "root filesystem has $AVAIL bytes free for export-image to work in" \
-            "$([ "$AVAIL" -ge 33554432 ] && echo 1 || echo 0)"
-          check "exactly one kernel flavour installed (found $KERNELS)" \
-            "$([ "$KERNELS" -eq 1 ] && echo 1 || echo 0)"
-          check "lightdm session is $EXPECTED_SESSION (found ${SESSION:-none})" \
-            "$([ "$SESSION" = "$EXPECTED_SESSION" ] && echo 1 || echo 0)"
-          # A session lightdm cannot find is the difference between a desktop and
-          # a black screen, and only one of the two session stacks is installed.
-          check "the $SESSION session is actually installed" \
-            "$(sudo test -e "/tmp/img/root/usr/share/wayland-sessions/$SESSION.desktop" || \
-               sudo test -e "/tmp/img/root/usr/share/xsessions/$SESSION.desktop" && echo 1 || echo 0)"
-          check "boot partition carries a kernel and an initramfs" \
-            "$(sudo test -e /tmp/img/boot/kernel8.img && sudo test -e /tmp/img/boot/initramfs8 && echo 1 || echo 0)"
-          # Raspberry Pi Imager's advanced options reach a Trixie image through
-          # cloud-init, and it can only rewrite the seed files if they are
-          # already on the boot partition.
-          check "cloud-init is installed for Imager's customisation" \
-            "$(sudo test -x /tmp/img/root/usr/bin/cloud-init && echo 1 || echo 0)"
-          # cloudinit-rpi means the Raspberry Pi config module plus the NoCloud
-          # datasource pointed at the boot partition, which is what lets Imager
-          # seed the image by dropping files there.
-          check "the Raspberry Pi cloud-init module is installed" \
-            "$(sudo test -e /tmp/img/root/usr/lib/python3/dist-packages/cloudinit/config/cc_raspberry_pi.py && echo 1 || echo 0)"
-          check "cloud-init reads its seed from the boot partition" \
-            "$(sudo grep -q 'seedfrom: file:///boot/firmware' /tmp/img/root/etc/cloud/cloud.cfg.d/99_raspberry-pi.cfg && echo 1 || echo 0)"
-          for seed in user-data meta-data network-config; do
-            check "boot partition carries $seed for Imager to write into" \
-              "$(sudo test -e "/tmp/img/boot/$seed" && echo 1 || echo 0)"
-          done
-          if [ "$SLIM_RPI_CONNECT" = '1' ]; then
-            check "rpi-connect is installed to back the rpi_connect capability" \
-              "$(sudo test -e /tmp/img/root/usr/bin/rpi-connect && echo 1 || echo 0)"
+          if [ "$VARIANT" = slim-desktop ]; then
+            sudo -E REPORT_FILE=image-report.env ./scripts/verify-slim-image "$IMG"
+            # shellcheck disable=SC1091
+            . ./image-report.env
+            {
+              echo '### Slim desktop image'
+              echo
+              printf 'Uncompressed image: **%s** (%s bytes)\n\n' \
+                "$(numfmt --to=si --suffix=B "$IMAGE_SIZE")" "$IMAGE_SIZE"
+              printf 'Root filesystem: %s used, %s free inside the image. It grows to fill the storage on first boot, which on a 4GB eMMC module leaves at least %s free.\n\n' \
+                "$(numfmt --to=si --suffix=B "$ROOT_USED")" \
+                "$(numfmt --to=si --suffix=B "$ROOT_AVAIL")" \
+                "$(numfmt --to=si --suffix=B "$((TARGET_STORAGE_BYTES - BOOT_PART_SIZE - 8388608 - ROOT_FOOTPRINT))")"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            # The stock variants make no promise about fitting small storage, so
+            # there is nothing to assert; report what came out.
+            sudo parted -s "$IMG" unit B print
+            SIZE="$(stat -c %s "$IMG")"
+            printf '### %s image\n\nUncompressed image: **%s** (%s bytes)\n\n' \
+              "$VARIANT" "$(numfmt --to=si --suffix=B "$SIZE")" "$SIZE" \
+              >> "$GITHUB_STEP_SUMMARY"
           fi
-          if [ "$SLIM_KEEP_TOOLCHAIN" = '1' ]; then
-            KVER="$(sudo ls /tmp/img/root/usr/lib/modules | head -1)"
-            check "kernel headers are usable for out-of-tree modules" \
-              "$(sudo test -e "/tmp/img/root/usr/lib/modules/$KVER/build/Makefile" && echo 1 || echo 0)"
-            check "a compiler is installed" \
-              "$(sudo test -x /tmp/img/root/usr/bin/gcc && echo 1 || echo 0)"
-          fi
-
-          {
-            echo '### Slim desktop image'
-            echo
-            printf 'Uncompressed image: **%s** (%s bytes)\n\n' \
-              "$(numfmt --to=si --suffix=B "$SIZE")" "$SIZE"
-            printf 'Root filesystem: %s used, %s free inside the image. It grows to fill the storage on first boot, which on a 4GB eMMC module leaves at least %s free.\n\n' \
-              "$(numfmt --to=si --suffix=B "$USED")" \
-              "$(numfmt --to=si --suffix=B "$AVAIL")" \
-              "$(numfmt --to=si --suffix=B "$((TARGET_STORAGE_BYTES - 276824064 - FOOTPRINT))")"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          sudo umount /tmp/img/boot /tmp/img/root
-          sudo losetup -d "$LOOP"
-          exit "$problems"
 
       - name: Assemble the release
         run: |
@@ -218,72 +199,88 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             BUILD_TAG="$GITHUB_REF_NAME"
           else
-            BUILD_TAG="slim-desktop-build-$(date -u +%Y%m%d)-${GITHUB_SHA:0:7}"
+            BUILD_TAG="$VARIANT-build-$(date -u +%Y%m%d)-${GITHUB_SHA:0:7}"
           fi
           echo "BUILD_TAG=$BUILD_TAG" >> "$GITHUB_ENV"
           echo "POINTER_TAG=slim-desktop-latest" >> "$GITHUB_ENV"
 
           ARCHIVE="$(ls deploy/image_*.img.xz deploy/image_*.img.gz deploy/image_*.zip \
             deploy/*.img 2>/dev/null | head -1)"
-          case "$ARCHIVE" in
-            *.img.xz) EXT=img.xz ;;
-            *.img.gz) EXT=img.gz ;;
-            *.zip)    EXT=zip ;;
-            *)        EXT=img ;;
-          esac
-          ASSET="raspios-slim-desktop-arm64.$EXT"
+          # Drop pi-gen's "image_" prefix and build date, leaving a name that is
+          # the same in every build release and so predictable in an OS list.
+          BASE="$(basename "$ARCHIVE")"
+          BASE="${BASE#image_}"
+          ASSET="$(echo "$BASE" | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}-//')"
+          STEM="${ASSET%%.img*}"
+          STEM="${STEM%.zip}"
 
           mkdir -p release
           cp "$ARCHIVE" "release/$ASSET"
           for f in deploy/*.bmap; do
-            [ -e "$f" ] && cp "$f" release/raspios-slim-desktop-arm64.bmap
+            if [ -e "$f" ]; then cp "$f" "release/$STEM.bmap"; fi
           done
           for f in deploy/*.info; do
-            [ -e "$f" ] && cp "$f" release/raspios-slim-desktop-arm64.info
+            if [ -e "$f" ]; then cp "$f" "release/$STEM.info"; fi
           done
 
-          ./scripts/make-os-list-json \
-            --image "$WORK_DIR"/export-image/*.img \
-            --archive "release/$ASSET" \
-            --url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$BUILD_TAG/$ASSET" \
-            --release-date "$(date -u +%Y-%m-%d)" \
-            --devices pi4-64bit,pi3-64bit \
-            --capabilities "$([ "$SLIM_RPI_CONNECT" = 1 ] && echo rpi_connect || echo '')" \
-            --website "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
-            --output release/os_list.json
+          if [ "$VARIANT" = slim-desktop ]; then
+            ./scripts/make-os-list-json \
+              --image "$WORK_DIR"/export-image/*.img \
+              --archive "release/$ASSET" \
+              --url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$BUILD_TAG/$ASSET" \
+              --release-date "$(date -u +%Y-%m-%d)" \
+              --devices pi4-64bit,pi3-64bit \
+              --capabilities "$([ "$SLIM_RPI_CONNECT" = 1 ] && echo rpi_connect || echo '')" \
+              --website "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              --output release/os_list.json
+          fi
 
           ( cd release && sha256sum ./* > sha256sums.txt )
           ls -l release
-          cat release/os_list.json
+          if [ -f release/os_list.json ]; then cat release/os_list.json; fi
 
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
+          # A push keeps the published OS list current; a manual build is left for
+          # the "Append to OS list" workflow to add deliberately.
+          MOVE_POINTER: ${{ github.event_name == 'push' && (inputs.variant || 'slim-desktop') == 'slim-desktop' }}
         run: |
           BUILD_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$BUILD_TAG"
           POINTER_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$POINTER_TAG"
           {
-            echo 'arm64 Raspberry Pi OS with the desktop, trimmed to fit 4GB storage'
-            echo '(Compute Module 3 and up), built from `config-slim-desktop`.'
+            if [ "$VARIANT" = slim-desktop ]; then
+              echo 'arm64 Raspberry Pi OS with the desktop, trimmed to fit 4GB storage'
+              echo '(Compute Module 3 and up), built from `config-slim-desktop`.'
+            else
+              echo "Stock pi-gen \`$VARIANT\` image, built from \`${GITHUB_REF_NAME}\`."
+            fi
             echo
             echo '## Raspberry Pi Imager'
             echo
-            echo 'To follow the newest build:'
-            echo
-            echo '```'
-            echo "rpi-imager --repo $POINTER_URL/os_list.json"
-            echo '```'
-            echo
-            echo 'To pin this build, whose image and checksums will never change:'
-            echo
-            echo '```'
-            echo "rpi-imager --repo $BUILD_URL/os_list.json"
-            echo '```'
-            echo
-            echo 'Hostname, username and password, SSH keys, Wi-Fi credentials,'
-            echo 'locale and Raspberry Pi Connect are applied through cloud-init,'
-            echo 'the same mechanism the stock Trixie images use'
-            echo '(`init_format: cloudinit-rpi`).'
+            if [ -f release/os_list.json ]; then
+              echo 'To pin this build, whose image and checksums will never change:'
+              echo
+              echo '```'
+              echo "rpi-imager --repo $BUILD_URL/os_list.json"
+              echo '```'
+              echo
+              if [ "$MOVE_POINTER" = true ]; then
+                echo 'To follow the newest build:'
+                echo
+                echo '```'
+                echo "rpi-imager --repo $POINTER_URL/os_list.json"
+                echo '```'
+                echo
+              fi
+              echo 'Hostname, username and password, SSH keys, Wi-Fi credentials,'
+              echo 'locale and Raspberry Pi Connect are applied through cloud-init,'
+              echo 'the same mechanism the stock Trixie images use'
+              echo '(`init_format: cloudinit-rpi`).'
+            else
+              echo 'Run the "Append to OS list" workflow with this tag to add the'
+              echo 'image to an OS list Imager can be pointed at.'
+            fi
             echo
             echo '## Files'
             echo
@@ -302,7 +299,7 @@ jobs:
           fi
           if ! gh release view "$BUILD_TAG" >/dev/null 2>&1; then
             gh release create "$BUILD_TAG" $PRERELEASE --target "$GITHUB_SHA" \
-              --title "Raspberry Pi OS slim desktop $BUILD_TAG" \
+              --title "Raspberry Pi OS $VARIANT $BUILD_TAG" \
               --notes-file release-notes.md
           fi
           # --clobber only ever replaces assets of a re-run of this same commit.
@@ -311,7 +308,7 @@ jobs:
           # The pointer release carries nothing but the OS list, so a copy of it
           # that Imager or a CDN has cached still names an image that exists and
           # still matches the hashes it was published with.
-          if [ "$GITHUB_REF_TYPE" != tag ]; then
+          if [ "$MOVE_POINTER" = true ]; then
             {
               echo 'OS list for Raspberry Pi Imager, pointing at the newest build.'
               echo
@@ -343,12 +340,18 @@ jobs:
           {
             echo
             echo "Build release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$BUILD_TAG"
-            echo
-            echo 'Add to Raspberry Pi Imager:'
-            echo
-            echo '```'
-            echo "rpi-imager --repo $POINTER_URL/os_list.json"
-            echo '```'
+            if [ -f release/os_list.json ]; then
+              echo
+              echo 'Add to Raspberry Pi Imager:'
+              echo
+              echo '```'
+              if [ "$MOVE_POINTER" = true ]; then
+                echo "rpi-imager --repo $POINTER_URL/os_list.json"
+              else
+                echo "rpi-imager --repo $BUILD_URL/os_list.json"
+              fi
+              echo '```'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Prune superseded build releases
@@ -360,8 +363,8 @@ jobs:
           # resolves; beyond that a stale list gets an honest 404 rather than
           # silently pointing at different bytes.
           gh release list --limit 100 --json tagName,createdAt \
-            --jq '[.[] | select(.tagName | startswith("slim-desktop-build-"))]
-                  | sort_by(.createdAt) | reverse | .[5:] | .[].tagName' |
+            --jq "[.[] | select(.tagName | startswith(\"$VARIANT-build-\"))]
+                  | sort_by(.createdAt) | reverse | .[5:] | .[].tagName" |
           while read -r old; do
             [ -n "$old" ] || continue
             echo "deleting superseded $old"
@@ -370,7 +373,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: raspios-slim-desktop-arm64-metadata
+          name: ${{ inputs.variant || 'slim-desktop' }}-metadata
           path: |
             release/os_list.json
             release/sha256sums.txt
