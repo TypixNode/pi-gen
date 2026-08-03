@@ -12,8 +12,9 @@ if [ "${SLIM_STRIP_DOCS:-1}" = "1" ]; then
 	strip_docs "${ROOTFS_DIR}" "${LOCALE_DEFAULT%%_*}"
 fi
 
-rm -rf "${ROOTFS_DIR}"/var/cache/apt/*.bin
-rm -rf "${ROOTFS_DIR}"/var/lib/apt/lists/*
+# The apt indices and caches are deliberately left in place: export-image
+# installs userconf-pi before it refreshes them, and it rebuilds both anyway.
+# What keeps them small is files/99-slim-apt, not deleting them here.
 
 log "slim-desktop rootfs usage:"
 du -x -h -s "${ROOTFS_DIR}" | tee -a "${LOG_FILE}"
