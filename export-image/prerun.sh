@@ -9,7 +9,7 @@ rm -f "${IMG_FILE}"
 rm -rf "${ROOTFS_DIR}"
 mkdir -p "${ROOTFS_DIR}"
 
-BOOT_SIZE="$((512 * 1024 * 1024))"
+BOOT_SIZE="${BOOT_SIZE:-$((512 * 1024 * 1024))}"
 ROOT_SIZE=$(du -x --apparent-size -s "${EXPORT_ROOTFS_DIR}" --exclude var/cache/apt/archives --exclude boot/firmware --block-size=1 | cut -f 1)
 
 # All partition sizes and starts will be aligned to this size
@@ -18,7 +18,9 @@ ALIGN="$((8 * 1024 * 1024))"
 # some overhead (since actual space usage is usually rounded up to the
 # filesystem block size) and gives some free space on the resulting
 # image.
-ROOT_MARGIN="$(echo "($ROOT_SIZE * 0.2 + 200 * 1024 * 1024) / 1" | bc)"
+ROOT_MARGIN_PERCENT="${ROOT_MARGIN_PERCENT:-20}"
+ROOT_MARGIN_FIXED="${ROOT_MARGIN_FIXED:-$((200 * 1024 * 1024))}"
+ROOT_MARGIN="$(echo "($ROOT_SIZE * $ROOT_MARGIN_PERCENT / 100 + $ROOT_MARGIN_FIXED) / 1" | bc)"
 
 BOOT_PART_START=$((ALIGN))
 BOOT_PART_SIZE=$(((BOOT_SIZE + ALIGN - 1) / ALIGN * ALIGN))

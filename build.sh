@@ -247,6 +247,11 @@ export QUILT_REFRESH_ARGS="-p ab"
 
 export ENABLE_CLOUD_INIT=${ENABLE_CLOUD_INIT:-1}
 
+# Image geometry overrides, consumed by export-image/prerun.sh
+export BOOT_SIZE
+export ROOT_MARGIN_PERCENT
+export ROOT_MARGIN_FIXED
+
 # shellcheck source=scripts/common
 source "${SCRIPT_DIR}/common"
 # shellcheck source=scripts/dependencies_check

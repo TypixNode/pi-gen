@@ -1,0 +1,3 @@
+Acquire::Languages "none";
+Acquire::GzipIndexes "true";
+Dir::Cache::srcpkgcache "";
