@@ -442,8 +442,21 @@ device; `SLIM_KEEP_TOOLCHAIN=0` reclaims those too. All the knobs are documented
 in `config-slim-desktop`.
 
 The `Build slim desktop image` GitHub Actions workflow builds the same image on a
-native arm64 runner and uploads it as an artifact; the session, the browser and
-the extra packages are workflow inputs.
+native arm64 runner; the session, the browser and the extra packages are workflow
+inputs. It publishes the image to a GitHub release together with an
+`os_list.json` that Raspberry Pi Imager can be pointed at:
+
+```bash
+rpi-imager --repo https://github.com/<owner>/pi-gen/releases/download/slim-desktop-latest/os_list.json
+```
+
+`scripts/make-os-list-json` writes that file from the built image, so its sizes
+and checksums always describe what was published. Two of its fields have to match
+what is in the image: `init_format` is `cloudinit-rpi`, which is how Imager's
+hostname, user, password, SSH and Wi-Fi settings reach a Trixie image, and needs
+cloud-init plus the seed files in the boot partition; and `capabilities` claims
+`rpi_connect`, which needs the rpi-connect package. The build fails if either
+stops being true.
 
 
 ## Skipping stages to speed up development
