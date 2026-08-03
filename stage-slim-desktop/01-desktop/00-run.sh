@@ -30,11 +30,25 @@ APP_PACKAGES="${SLIM_APP_PACKAGES-piwiz pi-package rp-bookshelf agnostics piclon
 mousepad eom evince xarchiver galculator lxtask \
 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-alsa gstreamer1.0-x}"
 
+# Raspberry Pi Connect, and wayvnc for its screen sharing. This is what the
+# `rpi_connect` capability in the published os-list entry promises, so the two
+# have to be kept in step.
+if [ "${SLIM_RPI_CONNECT:-1}" = "1" ]; then
+	APP_PACKAGES="${APP_PACKAGES} rpi-connect wayvnc"
+fi
+
 on_chroot <<- EOF
 	apt-get -o Acquire::Retries=3 install --no-install-recommends -y \
 		${SESSION_PACKAGES} ${THEME_PACKAGES} ${PREFS_PACKAGES} \
 		${BROWSER_PACKAGES} ${APP_PACKAGES} ${SLIM_EXTRA_PACKAGES}
 EOF
+
+# Ship the VNC server switched off, the way stage4 does.
+if [ -e "${ROOTFS_DIR}/usr/bin/wayvnc" ]; then
+	on_chroot <<- EOF
+		SUDO_USER="${FIRST_USER_NAME}" raspi-config nonint do_vnc 1
+	EOF
+fi
 
 # rpd-common's postinst pins lightdm to the X11 session and rpd-wayland-core's
 # pins it to labwc, so with both installed the winner depends on the order dpkg

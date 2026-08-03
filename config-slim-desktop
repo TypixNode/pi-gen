@@ -31,9 +31,13 @@ BOOT_SIZE="${BOOT_SIZE:-$((256 * 1024 * 1024))}"
 ROOT_MARGIN_PERCENT="${ROOT_MARGIN_PERCENT:-12}"
 ROOT_MARGIN_FIXED="${ROOT_MARGIN_FIXED:-$((200 * 1024 * 1024))}"
 
-# cloud-init and netplan are ~110MB of rootfs for a machine that is configured
-# from the desktop.
-ENABLE_CLOUD_INIT="${ENABLE_CLOUD_INIT:-0}"
+# cloud-init and netplan cost ~60MB, and on Trixie they are what applies the
+# hostname, user, password, SSH and Wi-Fi settings from Raspberry Pi Imager's
+# advanced options: Trixie's raspberrypi-sys-mods no longer ships the init_config
+# handler that read custom.toml, and the os-list entry this image is published
+# with declares `init_format: cloudinit-rpi`. Turning this off means Imager's
+# customisation silently does nothing.
+ENABLE_CLOUD_INIT="${ENABLE_CLOUD_INIT:-1}"
 
 # --- stage-slim-desktop knobs -------------------------------------------------
 # These are read by the stage's scripts, which run as child processes, so they
@@ -52,6 +56,11 @@ export SLIM_BROWSER="${SLIM_BROWSER:-chromium}"
 # Drop /usr/share/doc, /usr/share/man, /usr/share/info and the translation
 # catalogues for every language except LOCALE_DEFAULT's.
 export SLIM_STRIP_DOCS="${SLIM_STRIP_DOCS:-1}"
+
+# Install Raspberry Pi Connect and wayvnc (~25MB). This is what the `rpi_connect`
+# capability in the published os-list entry promises, so turning it off means
+# dropping that capability from the JSON as well.
+export SLIM_RPI_CONNECT="${SLIM_RPI_CONNECT:-1}"
 
 # Keep apt's package indices compressed and skip the source cache.
 export SLIM_APT_TRIM="${SLIM_APT_TRIM:-1}"
