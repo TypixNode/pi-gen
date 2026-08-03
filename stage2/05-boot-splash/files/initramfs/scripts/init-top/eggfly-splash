@@ -1,0 +1,96 @@
+#!/bin/sh
+# eggfly boot splash override (runs in the initramfs, before Plymouth shows).
+#
+# Fallback chain (highest priority first):
+#   (c) A user image on the FAT boot partition  -> use the TF-card image
+#   (a) otherwise the baked-in eggfly theme      -> use the compiled-in default
+#   (b) otherwise nothing                        -> Plymouth shows its background
+#
+# On the boot partition (visible as /boot/firmware on the running system, or as
+# the small FAT drive when the card is plugged into another computer) you may
+# drop either of these to override the default without rebuilding the image:
+#
+#   eggfly-splash.png              a single custom still image
+#   eggfly-splash/*.png            a folder of frames for a custom animation
+#
+# This script only *copies* the chosen files into the theme directory inside the
+# initramfs (a writable tmpfs). It runs in init-top, i.e. before initramfs-tools
+# starts plymouthd, so Plymouth picks up whatever we leave behind. It never
+# blocks boot for more than a brief, bounded device probe.
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+	prereqs)
+		prereqs
+		exit 0
+		;;
+esac
+
+THEME_DIR=/usr/share/plymouth/themes/eggfly
+# Nothing to do if the theme is not present in the initramfs.
+[ -d "$THEME_DIR" ] || exit 0
+
+MNT=/run/eggfly-boot
+mkdir -p "$MNT"
+
+# init-top runs before the main module-load pass, so nudge the modules we need
+# (best effort; failures are ignored). vfat/nls let us mount the FAT partition;
+# the mmc/sdhci stack makes the boot device appear if udev has not yet coldplug
+# loaded it. All of these are no-ops if already present or not applicable.
+for mod in mmc_core mmc_block sdhci sdhci-pltfm sdhci-iproc bcm2835_sdhost \
+	nls_ascii nls_cp437 nls_iso8859-1 vfat; do
+	modprobe "$mod" 2>/dev/null || true
+done
+command -v udevadm >/dev/null 2>&1 && udevadm settle --timeout=3 2>/dev/null || true
+
+# Locate the FAT boot partition. Bounded probe (~1.5s worst case) so a slow SD
+# controller does not stall the splash, and a missing partition just falls
+# through to the baked-in default.
+BOOTPART=""
+i=0
+while [ "$i" -lt 30 ]; do
+	for cand in \
+		/dev/disk/by-label/bootfs \
+		/dev/disk/by-label/boot \
+		/dev/mmcblk0p1 \
+		/dev/mmcblk1p1 \
+		/dev/nvme0n1p1 \
+		/dev/sda1
+	do
+		if [ -e "$cand" ]; then
+			BOOTPART="$cand"
+			break
+		fi
+	done
+	[ -n "$BOOTPART" ] && break
+	i=$((i + 1))
+	sleep 0.05
+done
+[ -n "$BOOTPART" ] || exit 0
+
+# Mount read-only; bail out quietly on any failure.
+mount -t vfat -o ro "$BOOTPART" "$MNT" 2>/dev/null || exit 0
+
+if ls "$MNT"/eggfly-splash/*.png >/dev/null 2>&1; then
+	# (c) custom animation from the boot partition
+	rm -f "$THEME_DIR"/eggfly-anim-*.png "$THEME_DIR"/splash.png 2>/dev/null
+	n=0
+	for f in $(ls "$MNT"/eggfly-splash/*.png | sort); do
+		cp "$f" "$THEME_DIR/eggfly-anim-${n}.png" 2>/dev/null || break
+		n=$((n + 1))
+	done
+	# Use the first frame as the static fallback image too.
+	first=$(ls "$MNT"/eggfly-splash/*.png | sort | head -n 1)
+	[ -n "$first" ] && cp "$first" "$THEME_DIR/splash.png" 2>/dev/null
+elif [ -f "$MNT/eggfly-splash.png" ]; then
+	# (c) custom single still image from the boot partition; drop the baked-in
+	# spinner so a plain still stays plain.
+	rm -f "$THEME_DIR"/eggfly-anim-*.png 2>/dev/null
+	cp "$MNT/eggfly-splash.png" "$THEME_DIR/splash.png" 2>/dev/null
+fi
+# else: keep the baked-in eggfly default (case a); if even that is missing the
+# theme simply shows its background (case b).
+
+umount "$MNT" 2>/dev/null || true
+exit 0

@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Eggfly
+Description=Eggfly custom boot splash (static image + optional rainbow spinner)
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/eggfly
+ScriptFile=/usr/share/plymouth/themes/eggfly/eggfly.script

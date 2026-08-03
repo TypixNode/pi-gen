@@ -1,0 +1,77 @@
+# Eggfly Plymouth theme (script module).
+#
+# Behaviour:
+#   * Paints a dark background.
+#   * Shows "splash.png" centred and scaled to fit the screen.
+#   * If frames named "eggfly-anim-0.png", "eggfly-anim-1.png", ... exist,
+#     cycles them as a small spinner near the bottom. The spinner is driven by
+#     Plymouth's refresh callback, so it never blocks the boot sequence.
+#
+# The initramfs override script may replace splash.png and/or the eggfly-anim-*
+# frames at boot time with images taken from the FAT boot partition. This theme
+# does not care where the images came from; it just renders whatever is present.
+
+# --- background -------------------------------------------------------------
+Window.SetBackgroundTopColor(0.06, 0.07, 0.09);
+Window.SetBackgroundBottomColor(0.02, 0.02, 0.04);
+
+screen_width = Window.GetWidth();
+screen_height = Window.GetHeight();
+
+# --- static splash ----------------------------------------------------------
+splash.image = Image("splash.png");
+if (splash.image) {
+    image_width = splash.image.GetWidth();
+    image_height = splash.image.GetHeight();
+
+    scale = 1;
+    if (image_width > screen_width || image_height > screen_height) {
+        scale_w = screen_width / image_width;
+        scale_h = screen_height / image_height;
+        scale = scale_w;
+        if (scale_h < scale_w) scale = scale_h;
+    }
+
+    splash.scaled = splash.image.Scale(image_width * scale, image_height * scale);
+    splash.sprite = Sprite(splash.scaled);
+    splash.sprite.SetX((screen_width - splash.scaled.GetWidth()) / 2);
+    splash.sprite.SetY((screen_height - splash.scaled.GetHeight()) / 2);
+    splash.sprite.SetZ(0);
+}
+
+# --- optional spinner frames ------------------------------------------------
+anim.count = 0;
+for (i = 0; i < 512; i++) {
+    frame = Image("eggfly-anim-" + i + ".png");
+    if (!frame) break;
+    anim.frames[i] = frame;
+    anim.count++;
+}
+
+anim.sprite = Sprite();
+anim.sprite.SetZ(10);
+anim.tick = 0;
+
+# Advance one frame roughly every few refreshes so the spin is smooth but calm.
+fun refresh_callback() {
+    if (anim.count < 1) return;
+
+    index = Math.Int(anim.tick / 3) % anim.count;
+    frame = anim.frames[index];
+    anim.sprite.SetImage(frame);
+    anim.sprite.SetX((screen_width - frame.GetWidth()) / 2);
+    anim.sprite.SetY(screen_height * 0.80);
+    anim.tick++;
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+# --- boot progress / password prompt hooks (kept minimal & defensive) -------
+fun message_callback(text) {
+    if (!global.message_sprite) global.message_sprite = Sprite();
+    global.message_image = Image.Text(text, 0.7, 0.7, 0.75);
+    global.message_sprite.SetImage(global.message_image);
+    global.message_sprite.SetX((screen_width - global.message_image.GetWidth()) / 2);
+    global.message_sprite.SetY(screen_height * 0.90);
+    global.message_sprite.SetZ(20);
+}
+Plymouth.SetMessageFunction(message_callback);

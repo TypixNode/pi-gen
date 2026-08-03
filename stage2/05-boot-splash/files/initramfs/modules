@@ -1,0 +1,7 @@
+# eggfly boot splash: FAT + charset modules so the initramfs override script can
+# read a custom splash image from the boot partition. Appended to
+# /etc/initramfs-tools/modules by stage2/05-boot-splash/00-run.sh.
+vfat
+nls_ascii
+nls_cp437
+nls_iso8859-1
