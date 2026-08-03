@@ -132,6 +132,11 @@ jobs:
 
           AVAIL="$(df -B1 --output=avail /tmp/img/root | tail -1)"
           USED="$(df -B1 --output=used /tmp/img/root | tail -1)"
+          PART_SIZE="$(sudo blockdev --getsize64 "${LOOP}p2")"
+          # Everything the filesystem is not offering to a normal user: the data,
+          # its metadata, and the 5% ext4 keeps back for root. Counting all of it
+          # as spoken for makes the estimate below a floor rather than a guess.
+          FOOTPRINT=$((PART_SIZE - AVAIL))
           KERNELS="$(sudo ls /tmp/img/root/usr/lib/modules | wc -l)"
           SESSION="$(sudo sed -n 's/^user-session=//p' /tmp/img/root/etc/lightdm/lightdm.conf)"
 
@@ -192,10 +197,10 @@ jobs:
             echo
             printf 'Uncompressed image: **%s** (%s bytes)\n\n' \
               "$(numfmt --to=si --suffix=B "$SIZE")" "$SIZE"
-            printf 'Root filesystem: %s used, %s free inside the image. It grows to fill the storage on first boot, which on a 4GB eMMC module leaves about %s free.\n\n' \
+            printf 'Root filesystem: %s used, %s free inside the image. It grows to fill the storage on first boot, which on a 4GB eMMC module leaves at least %s free.\n\n' \
               "$(numfmt --to=si --suffix=B "$USED")" \
               "$(numfmt --to=si --suffix=B "$AVAIL")" \
-              "$(numfmt --to=si --suffix=B "$((TARGET_STORAGE_BYTES - 276824064 - USED))")"
+              "$(numfmt --to=si --suffix=B "$((TARGET_STORAGE_BYTES - 276824064 - FOOTPRINT))")"
           } >> "$GITHUB_STEP_SUMMARY"
 
           sudo umount /tmp/img/boot /tmp/img/root
