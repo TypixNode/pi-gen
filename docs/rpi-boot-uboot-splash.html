@@ -361,10 +361,45 @@ sudo update-initramfs -u     # 若启用了 initramfs 则需刷新</code></pre>
   </div>
 </section>
 
+<!-- ======================================================= -->
+<section id="implemented">
+  <h2>五、本仓库已实现的方案（stage2/05-boot-splash）</h2>
+  <p>结合论坛调研（uConsole/DevTerm 用 Plymouth 换 <code>pix</code> 主题、官方 <code>fullscreen_logo</code> 早期图、社区 initramfs 早期画帧），
+  本仓库落地了一个自包含的 <strong>eggfly</strong> 自定义启动图 stage，兼顾"编译进默认图 + 从 TF 卡 boot 分区覆盖 + 动画不阻塞"。</p>
+
+  <h3>技术选型</h3>
+  <ul>
+    <li><strong>Plymouth 自定义主题</strong>（与 uConsole 同一机制，对 KMS 友好、原生支持动画且非阻塞）承载默认图与彩虹 spinner；</li>
+    <li><strong>initramfs <code>init-top</code> 覆盖脚本</strong>在 Plymouth 显示前挂载 FAT boot 分区，按回退链决定用哪张图；</li>
+    <li><code>config.txt</code> 加 <code>disable_splash=1</code> 隐藏固件彩虹，<code>cmdline.txt</code> 加 <code>quiet splash logo.nologo loglevel=3 vt.global_cursor_default=0</code> 清场并启用 Plymouth。</li>
+  </ul>
+
+  <h3>回退链（完全对应需求）</h3>
+  <table>
+    <tr><th>情形</th><th>行为</th></tr>
+    <tr><td>(c) boot 分区存在自定义图</td><td>用 TF 卡上的 <code>eggfly-splash.png</code> 或 <code>eggfly-splash/</code> 帧目录</td></tr>
+    <tr><td>(a) boot 分区没有</td><td>用编译进镜像的 eggfly 默认图（含彩虹 spinner 动画）</td></tr>
+    <tr><td>(b) 连默认图也缺失</td><td>Plymouth 只显示背景</td></tr>
+  </table>
+
+  <h3>动画与时机</h3>
+  <p>spinner 由 Plymouth 的刷新回调驱动，与启动其余部分<strong>并行</strong>，不阻塞——所以默认就是多帧动画；
+  TF 卡放一个帧目录即可换成自定义多帧动画，放单张 PNG 则是单帧。出现时机约在固件交接后 <strong>2–3 秒</strong>，即彩虹屏原本的位置。</p>
+  <div class="callout warn">
+    <span class="title">关于"1 秒内、彩虹那一瞬间"</span>
+    真正亚秒级、与彩虹同一刻只能靠闭源固件或内核内置 logo；启用 KMS 后帧缓冲要等显示驱动 probe 才存在，
+    因此 Plymouth 的 2–3 秒是稳健且能做动画的最佳折中。若还想更早显示一张<strong>静态</strong>图，可叠加官方内核早期图（<code>fullscreen_logo=1</code> + <code>/lib/firmware</code> 里的 TGA）。
+  </div>
+
+  <h3>怎么用 / 怎么测</h3>
+  <p>构建包含该 stage 的镜像并烧录即可看到 eggfly 启动图。想换图：把 <code>eggfly-splash.png</code>（或 <code>eggfly-splash/</code> 帧目录）拷到 boot 分区（FAT，任何电脑都能改），重启即生效，<strong>无需重编译、无需 update-initramfs</strong>。默认图可用 <code>stage2/05-boot-splash/files/tools/generate-splash.py</code> 重新生成。详见该目录下的 <code>README.md</code>。</p>
+</section>
+
 </main>
 
 <footer>
-  基于 Raspberry Pi 官方文档（Boot flow / config.txt / EEPROM bootloader）与 U-Boot 文档整理 · 2026-08
+  基于 Raspberry Pi 官方文档（Boot flow / config.txt / EEPROM bootloader）、U-Boot 文档、
+  及论坛调研（ClockworkPi uConsole、Raspberry Pi Forums Early Boot Splash）整理 · 2026-08
 </footer>
 
 </body>
