@@ -1,0 +1,64 @@
+# TypixDeck OS: Raspberry Pi OS Trixie (arm64) for the TypixDeck / TypixNode
+# handheld (Compute Module 5 carrier board), with:
+#
+#   * the slim labwc desktop from slim-desktop-stage (~3GB image),
+#   * a custom kernel (rpi-6.18.y + the dwc2 ISO-OUT split fix that makes USB
+#     audio behind the on-board FE2.1 hub work) installed by typixdeck-stage,
+#   * the 3.2" 1024x768 DPI panel and GT911 touch overlays preloaded,
+#   * cloud-init kept enabled so Raspberry Pi Imager's advanced options
+#     (hostname, user, password, Wi-Fi, SSH, locale) keep working
+#     (`init_format: cloudinit-rpi` in the os-list entry).
+#
+#   sudo ./build.sh -c config-typixdeck        # native arm64 host
+#   ./build-docker.sh -c config-typixdeck      # in Docker (e.g. Apple Silicon)
+#
+# Before building, drop the kernel .debs into
+# typixdeck-stage/00-install-kernel/files/debs/ (see typixdeck-stage/README.md).
+#
+# Add `touch stage2/SKIP_IMAGES slim-desktop-stage/SKIP_IMAGES` if you only
+# want the final TypixDeckOS image and not the intermediate Lite/slim ones.
+
+IMG_NAME="${IMG_NAME:-TypixDeckOS}"
+RELEASE="${RELEASE:-trixie}"
+
+STAGE_LIST="stage0 stage1 stage2 slim-desktop-stage typixdeck-stage"
+
+TARGET_HOSTNAME="${TARGET_HOSTNAME:-typixdeck}"
+
+# Neutral defaults; Imager's advanced options override all of them on flash.
+LOCALE_DEFAULT="${LOCALE_DEFAULT:-en_US.UTF-8}"
+KEYBOARD_KEYMAP="${KEYBOARD_KEYMAP:-us}"
+KEYBOARD_LAYOUT="${KEYBOARD_LAYOUT:-English (US)}"
+TIMEZONE_DEFAULT="${TIMEZONE_DEFAULT:-Etc/UTC}"
+
+# No baked-in password: the first user is customised by Raspberry Pi Imager
+# (cloud-init) or the first-boot wizard, exactly like the stock images.
+FIRST_USER_NAME="${FIRST_USER_NAME:-pi}"
+
+# cloud-init is what applies Imager's customisation on Trixie; never disable
+# it for a published image (see stage2/04-cloud-init and config-slim-desktop).
+ENABLE_CLOUD_INIT="${ENABLE_CLOUD_INIT:-1}"
+
+# Raspberry Pi Imager consumes .img.xz directly.
+DEPLOY_COMPRESSION="${DEPLOY_COMPRESSION:-xz}"
+
+# One kernel flavour, small boot partition (same reasoning as the slim config).
+BOOT_SIZE="${BOOT_SIZE:-$((256 * 1024 * 1024))}"
+ROOT_MARGIN_PERCENT="${ROOT_MARGIN_PERCENT:-12}"
+ROOT_MARGIN_FIXED="${ROOT_MARGIN_FIXED:-$((200 * 1024 * 1024))}"
+
+# --- slim-desktop-stage knobs, tuned for the CM5 ------------------------------
+# labwc (Wayland) session, like the stock Trixie desktop.
+export SLIM_DESKTOP_SESSION="${SLIM_DESKTOP_SESSION:-wayland}"
+export SLIM_BROWSER="${SLIM_BROWSER:-chromium}"
+# CM5 is BCM2712: keep the rpi-2712 stock kernel as the fallback flavour and
+# drop rpi-v8 (typixdeck-stage installs the dwc2fix kernel on top).
+export SLIM_KEEP_KERNEL="${SLIM_KEEP_KERNEL:-rpi-2712}"
+# BCM43455 on-module radio.
+export SLIM_KEEP_FIRMWARE="${SLIM_KEEP_FIRMWARE-firmware-brcm80211}"
+export SLIM_STRIP_DOCS="${SLIM_STRIP_DOCS:-1}"
+export SLIM_APT_TRIM="${SLIM_APT_TRIM:-1}"
+export SLIM_DROP_FOREIGN_ARCH="${SLIM_DROP_FOREIGN_ARCH:-1}"
+export SLIM_RPI_CONNECT="${SLIM_RPI_CONNECT:-1}"
+export SLIM_KEEP_TOOLCHAIN="${SLIM_KEEP_TOOLCHAIN:-1}"
+export SLIM_EXTRA_PACKAGES="${SLIM_EXTRA_PACKAGES-}"
