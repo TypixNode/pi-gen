@@ -17,15 +17,15 @@ if [ -z "${IMAGE_DEB}" ]; then
 	exit 1
 fi
 
-install -d "${ROOTFS_DIR}/tmp/typixdeck-debs"
-cp "${DEB_DIR}"/linux-*dwc2fix*_arm64.deb "${ROOTFS_DIR}/tmp/typixdeck-debs/"
+install -d "${ROOTFS_DIR}/var/tmp/typixdeck-debs"
+cp "${DEB_DIR}"/linux-*dwc2fix*_arm64.deb "${ROOTFS_DIR}/var/tmp/typixdeck-debs/"
 
 on_chroot << EOF
-dpkg -i /tmp/typixdeck-debs/linux-image-*.deb
-if ls /tmp/typixdeck-debs/linux-headers-*.deb >/dev/null 2>&1; then
-	dpkg -i /tmp/typixdeck-debs/linux-headers-*.deb
+dpkg -i /var/tmp/typixdeck-debs/linux-image-*.deb
+if ls /var/tmp/typixdeck-debs/linux-headers-*.deb >/dev/null 2>&1; then
+	dpkg -i /var/tmp/typixdeck-debs/linux-headers-*.deb
 fi
-rm -rf /tmp/typixdeck-debs
+rm -rf /var/tmp/typixdeck-debs
 EOF
 
 # The version string is whatever the deb installed under /lib/modules.

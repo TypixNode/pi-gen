@@ -7,21 +7,21 @@
 
 OVERLAYS="vc4-kms-dpi-3inch2-1024x768 gt911-touch-3inch2-1024x768"
 
-install -d "${ROOTFS_DIR}/tmp/typixdeck-overlays"
+install -d "${ROOTFS_DIR}/var/tmp/typixdeck-overlays"
 for ov in ${OVERLAYS}; do
-	install -m 644 "files/${ov}.dts" "${ROOTFS_DIR}/tmp/typixdeck-overlays/"
+	install -m 644 "files/${ov}.dts" "${ROOTFS_DIR}/var/tmp/typixdeck-overlays/"
 done
 
 for ov in ${OVERLAYS}; do
 	on_chroot << EOF
 dtc -q -I dts -O dtb \
 	-o "/boot/firmware/overlays/${ov}.dtbo" \
-	"/tmp/typixdeck-overlays/${ov}.dts"
+	"/var/tmp/typixdeck-overlays/${ov}.dts"
 EOF
 done
 
 on_chroot << EOF
-rm -rf /tmp/typixdeck-overlays
+rm -rf /var/tmp/typixdeck-overlays
 EOF
 
 cat >> "${ROOTFS_DIR}/boot/firmware/config.txt" << EOF
