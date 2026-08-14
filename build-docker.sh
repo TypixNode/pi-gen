@@ -9,11 +9,14 @@ BUILD_OPTS="$*"
 # Allow user to override docker command
 DOCKER=${DOCKER:-docker}
 
-# Ensure that default docker command is not set up in rootless mode
-if \
+# Ensure that default docker command is not set up in rootless mode. Docker
+# Desktop on macOS lists "rootless" among its security options even though the
+# daemon runs as root inside its VM and the CLI needs no sudo, so skip the
+# check there.
+if [ "$(uname)" != "Darwin" ] && { \
   ! ${DOCKER} ps    >/dev/null 2>&1 || \
-    ${DOCKER} info 2>/dev/null | grep -q rootless \
-; then
+    ${DOCKER} info 2>/dev/null | grep -q rootless; \
+}; then
 	DOCKER="sudo ${DOCKER}"
 fi
 if ! ${DOCKER} ps >/dev/null; then
