@@ -17,12 +17,11 @@ name: Build TypixDeck Android image
 on:
   workflow_dispatch:
     inputs:
-      # KonstaKANG hosts the zips on Filen, whose share links decrypt in the
-      # browser and cannot be curled; download the zip manually, park it on a
-      # release of this repo (gh release create android-src --prerelease;
-      # gh release upload android-src lineage-*.zip) and pass that asset URL.
+      # Either a plain URL or a Filen share link (app.filen.io/#/d/...) as
+      # posted on the KonstaKANG device pages; Filen links are fetched with
+      # scripts/fetch-filen-link.mjs since they cannot be curled.
       image_url:
-        description: Direct (curl-able) URL of the KonstaKANG lineage-*.zip
+        description: URL of the KonstaKANG lineage-*.zip (Filen share links work)
         type: string
         required: true
       image_sha256:
@@ -76,7 +75,15 @@ jobs:
 
       - name: Download the KonstaKANG image
         run: |
-          curl -fL --retry 3 -o "$WORK_DIR/lineage.zip" "${{ inputs.image_url }}"
+          case "${{ inputs.image_url }}" in
+            *app.filen.io*)
+              npm install --no-save @filen/sdk
+              node scripts/fetch-filen-link.mjs "${{ inputs.image_url }}" "$WORK_DIR/lineage.zip"
+              ;;
+            *)
+              curl -fL --retry 3 -o "$WORK_DIR/lineage.zip" "${{ inputs.image_url }}"
+              ;;
+          esac
           if [ -n "${{ inputs.image_sha256 }}" ]; then
             echo "${{ inputs.image_sha256 }}  $WORK_DIR/lineage.zip" | sha256sum -c -
           fi

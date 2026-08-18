@@ -81,17 +81,9 @@ Android 镜像**不会像 Pi OS 一样首次开机自动扩容**：分区表里�
 
 ### 如何触发一次 Android 构建
 
-KonstaKANG 把 zip 托管在 Filen 网盘（端到端加密，链接只能在浏览器里解密下载，CI 无法直接 `curl`），所以流程是：
-
-1. 在 [KonstaKANG 设备页](https://konstakang.com/devices/rpi5/LineageOS23/)（rpi5 = Pi 5/CM5；rpi4 = Pi 4/CM4）用浏览器下载 `lineage-*-rpi5.zip`，记下页面上的 sha256；
-2. 把 zip 上传到本仓库的一个中转 Release：
-
-   ```bash
-   gh release create android-src --prerelease --title "Android source zips" --notes "KonstaKANG originals, staging for the repack workflow" || true
-   gh release upload android-src lineage-23.2-20260520-UNOFFICIAL-KonstaKANG-rpi5.zip
-   ```
-
-3. 在 Actions 里手动运行 **Build TypixDeck Android image**，`image_url` 填该 Release 资产的下载地址，`image_sha256` 填设备页的校验和，选择启动介质（sdcard/usb/nvme），跑完后 Android 条目自动出现在 os_list 里。
+1. 打开 [KonstaKANG 设备页](https://konstakang.com/devices/rpi5/LineageOS23/)（rpi5 = Pi 5/CM5；rpi4 = Pi 4/CM4），复制 `lineage-*-rpi5.zip` 的下载链接（Filen 分享链接，形如 `https://app.filen.io/#/d/...`）和页面上的 sha256；
+2. 在 Actions 里手动运行 **Build TypixDeck Android image**，`image_url` 直接粘贴 Filen 链接（CI 用 `scripts/fetch-filen-link.mjs` 匿名解密下载，普通直链也支持），`image_sha256` 填校验和，选择启动介质（sdcard/usb/nvme）；
+3. 跑完后 Android 条目自动出现在 os_list 里。
 
 ### 许可注意
 
