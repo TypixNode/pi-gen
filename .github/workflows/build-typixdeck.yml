@@ -1,0 +1,193 @@
+name: Build TypixDeck image
+
+# The image variants for the TypixDeck, a foldable CM4/CM5 cyberdeck with a
+# 1024x768 DPI touchscreen: the stock Raspberry Pi desktop plus the
+# typixdeck-stage hardware support, and a KDE Plasma Mobile variant.
+#
+# A push of a typixdeck-v* tag builds a formal release. A push to the
+# typixdeck branch (based on the arm64 branch, whose build.sh targets arm64)
+# that touches the TypixDeck stages or configs builds a timestamped Beta. Either
+# way both variants build in parallel and the os-list job merges their entries
+# into the OS list on the typixdeck-latest pointer release, the stable URL
+# Raspberry Pi Imager is pointed at (see docs/imager_custom_repo.md).
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: Which variant to build
+        type: choice
+        options: [all, typixdeck, typixdeck-plasma-mobile]
+        default: all
+      ref:
+        description: Branch, tag or SHA to build (blank = the one selected above)
+        type: string
+        default: ''
+      update_os_list:
+        description: Merge the result into the published OS list
+        type: boolean
+        default: true
+  push:
+    tags:
+      - 'typixdeck-v*'
+    branches:
+      - typixdeck
+    paths:
+      - 'typixdeck-stage/**'
+      - 'plasma-mobile-stage/**'
+      - 'config-typixdeck*'
+      - '.github/workflows/build-image.yml'
+      - '.github/workflows/build-typixdeck.yml'
+
+# A build takes a while; only the newest commit on a ref is worth one.
+concurrency:
+  group: typixdeck-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ (github.event_name == 'workflow_dispatch' && inputs.variant != 'all')
+          && fromJSON(format('["{0}"]', inputs.variant))
+          || fromJSON('["typixdeck", "typixdeck-plasma-mobile"]') }}
+    uses: ./.github/workflows/build-image.yml
+    with:
+      variant: ${{ matrix.variant }}
+      config: config-${{ matrix.variant }}
+      ref: ${{ inputs.ref || '' }}
+      # The os-list job below merges both variants into the pointer in one
+      # serialised place; per-build move_pointer would race between the two
+      # matrix jobs.
+      move_pointer: false
+      pointer_tag: typixdeck-latest
+      # The Plasma Mobile variant is always marked Beta (known rendering
+      # issues on the KMS driver); the beta flag below additionally stamps
+      # non-tag builds of either variant with the timestamp and commit.
+      os_list_name: ${{ matrix.variant == 'typixdeck'
+        && 'Raspberry Pi OS Desktop (Trixie arm64) for TypixDeck'
+        || 'Raspberry Pi OS + KDE Plasma Mobile (Trixie arm64) for TypixDeck (Beta)' }}
+      os_list_description: ${{ matrix.variant == 'typixdeck'
+        && 'Debian Trixie arm64 with Raspberry Pi Desktop, for TypixDeck.'
+        || 'Debian Trixie arm64 with KDE Plasma Mobile 6 touch UI, for TypixDeck. Pre-release.' }}
+      os_list_devices: typixdeck
+      # rpi-connect is removed from these images, so no rpi_connect here.
+      os_list_capabilities: ''
+      beta: ${{ github.ref_type != 'tag' }}
+
+  os-list:
+    needs: build
+    # Runs even when part of the matrix failed, publishing whichever variants
+    # did build. Skipped only when a manual run opted out.
+    if: ${{ !cancelled() && (github.event_name == 'push' || inputs.update_os_list) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    # Shared with append-os-list.yml runs that target the same pointer, so two
+    # download-merge-upload sequences never interleave. (If several runs pile
+    # up, GitHub keeps only the newest pending one; a build whose update got
+    # cancelled that way can be re-added with the "Append to OS list"
+    # workflow.)
+    concurrency:
+      group: os-list-typixdeck-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      POINTER_TAG: typixdeck-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*-metadata'
+          path: artifacts
+
+      - name: Merge the new entries into the OS list
+        run: |
+          mkdir -p work
+          if gh release download "$POINTER_TAG" --pattern os_list.json --dir work; then
+            echo "merging into the existing list"
+          else
+            echo "no existing list at $POINTER_TAG, starting one"
+          fi
+
+          found=0
+          # Desktop first, so it sits above Plasma Mobile in a fresh list.
+          for variant in typixdeck typixdeck-plasma-mobile; do
+            src="artifacts/$variant-metadata/os_list.json"
+            [ -f "$src" ] || continue
+            found=1
+            if [ "$variant" = typixdeck ]; then
+              GROUP="Raspberry Pi OS Desktop for TypixDeck (Beta builds)"
+            else
+              GROUP="Raspberry Pi OS + KDE Plasma Mobile for TypixDeck (Beta builds)"
+            fi
+            # Timestamped Beta entries are folded into a per-variant subitems
+            # folder, newest first; tagged builds replace the top-level entry
+            # of the same name. The limit matches the five build releases the
+            # build workflow keeps around, so a listed Beta always resolves.
+            ./scripts/make-os-list-json \
+              --merge-from "$src" \
+              --merge-into work/os_list.json \
+              --subitems-group "$GROUP" \
+              --subitems-limit 5 \
+              --output work/os_list.json
+          done
+
+          if [ "$found" = 0 ]; then
+            echo "no built variant produced an OS list entry; nothing to publish"
+            echo "SKIP_PUBLISH=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          cat work/os_list.json
+
+      - name: Publish the OS list
+        if: env.SKIP_PUBLISH != '1'
+        run: |
+          POINTER_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$POINTER_TAG"
+          {
+            echo 'OS list for Raspberry Pi Imager: TypixDeck images, newest builds.'
+            echo
+            echo '```'
+            echo "rpi-imager --repo $POINTER_URL/os_list.json"
+            echo '```'
+            echo
+            echo 'Or in Imager: App Options -> Content Repository -> custom URL.'
+            echo 'See `docs/imager_custom_repo.md` for a walkthrough.'
+            echo
+          } > notes.md
+          jq -r '
+            def row: "| \(.name) | \((.extract_size // 0) / 10000000 | round / 100) GB |";
+            "| Image | Uncompressed |",
+            "| --- | --- |",
+            (.os_list[] | if has("subitems") then .subitems[] | row else row end)
+          ' work/os_list.json >> notes.md
+
+          if gh release view "$POINTER_TAG" >/dev/null 2>&1; then
+            gh release edit "$POINTER_TAG" --notes-file notes.md
+          else
+            gh release create "$POINTER_TAG" --prerelease --target "$GITHUB_SHA" \
+              --title "TypixDeck OS images (OS list for Raspberry Pi Imager)" \
+              --notes-file notes.md
+          fi
+          gh release upload "$POINTER_TAG" work/os_list.json --clobber
+
+          # The pointer release carries nothing but the OS list, so a cached
+          # copy of it still names images that exist and match their hashes.
+          gh release view "$POINTER_TAG" --json assets \
+            --jq '.assets[].name | select(. != "os_list.json")' |
+          while read -r extra; do
+            [ -n "$extra" ] || continue
+            echo "removing $extra from $POINTER_TAG"
+            gh release delete-asset "$POINTER_TAG" "$extra" --yes
+          done
+
+          {
+            echo '### OS list updated'
+            echo
+            cat notes.md
+          } >> "$GITHUB_STEP_SUMMARY"

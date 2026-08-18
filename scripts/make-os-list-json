@@ -24,11 +24,27 @@ The device tags come from the imager.devices list and gate which images Imager
 shows for the board the user picked, so they have to match what the image can
 actually boot: an image carrying only the rpi-v8 kernel runs on BCM2837 and
 BCM2711 (pi3-64bit, pi4-64bit) but not on a Raspberry Pi 5.
+
+Two modes:
+
+  Measure an image (--archive, --url) and merge its entry into a list.
+
+  Merge the entries of another list (--merge-from) into a list, which is how a
+  workflow that built several variants in parallel combines their single-entry
+  lists into the published one without re-downloading the images.
+
+Pre-release builds (--beta) get a UTC timestamp and a (Beta) suffix in the
+name, and the commit and workflow run number in the description. When merging
+with --subitems-group, entries named that way are folded into a subitems
+folder, newest first, instead of piling up at the top level.
 """
 import argparse
+import copy
+import datetime
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -72,6 +88,28 @@ DEVICES = [
     },
 ]
 
+# Devices of our own that upstream does not know. One is added to a document's
+# imager.devices only when an OS entry references its tag, so lists that never
+# mention the tag keep the stock picker. Custom devices in the list need
+# Imager v1.7.3 or newer; the capabilities field needs Imager 2.x.
+EXTRA_DEVICES = {
+    "typixdeck": {
+        "name": "TypixDeck",
+        "tags": ["typixdeck"],
+        "default": True,
+        "icon": "https://raw.githubusercontent.com/eggfly/pi-gen/typixdeck/"
+                "imager/typixdeck-icon.png",
+        "description": "Foldable cyberdeck based on the Raspberry Pi CM4/CM5 "
+                       "with a 1024x768 DPI touchscreen",
+        "matching_type": "exclusive",
+        "capabilities": [],
+    },
+}
+
+# What --beta appends to an entry name, and therefore how merging recognises
+# an entry that belongs in the --subitems-group folder.
+BETA_NAME_RE = re.compile(r" \d{8}-\d{6} \(Beta\)$")
+
 
 DECOMPRESSORS = {
     ".xz": ["xz", "-dc"],
@@ -105,64 +143,173 @@ def measure_uncompressed(archive):
     return size, digest.hexdigest()
 
 
+def flatten(os_list):
+    """The plain entries of a list, with subitems folders unfolded."""
+    for item in os_list:
+        if "subitems" in item:
+            yield from item["subitems"]
+        else:
+            yield item
+
+
+def merge_entry(document, entry, group, group_description, limit):
+    """Insert entry, replacing any existing entry of the same name. A beta
+    entry goes into the subitems folder called group when one is asked for."""
+    os_list = document["os_list"]
+    if group and BETA_NAME_RE.search(entry.get("name", "")):
+        folder = next((e for e in os_list
+                       if e.get("name") == group and "subitems" in e), None)
+        if folder is None:
+            folder = {
+                "name": group,
+                "description": group_description,
+                # Copied from the entry so the folder passes the same device
+                # filtering its contents do.
+                "devices": entry.get("devices", []),
+                "subitems": [],
+            }
+            if entry.get("icon"):
+                folder["icon"] = entry["icon"]
+            os_list.append(folder)
+        folder["subitems"] = [e for e in folder["subitems"]
+                              if e.get("name") != entry["name"]]
+        folder["subitems"].insert(0, entry)  # newest first
+        if limit > 0:
+            del folder["subitems"][limit:]
+    else:
+        document["os_list"] = [e for e in os_list
+                               if e.get("name") != entry["name"]] + [entry]
+
+
+def add_referenced_devices(document):
+    """Add the EXTRA_DEVICES whose tags the OS entries use."""
+    used = set()
+    for entry in document["os_list"]:
+        used.update(entry.get("devices", []))
+        for sub in entry.get("subitems", []):
+            used.update(sub.get("devices", []))
+    devices = document.setdefault("imager", {}).setdefault(
+        "devices", copy.deepcopy(DEVICES))
+    for tag, device in EXTRA_DEVICES.items():
+        if tag not in used:
+            continue
+        if any(tag in d.get("tags", []) for d in devices):
+            continue
+        if device.get("default"):
+            for d in devices:
+                d["default"] = False
+        devices.insert(0, copy.deepcopy(device))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--image",
                         help="the uncompressed .img, for extract_size/extract_sha256; "
                              "measured by decompressing --archive when not given")
-    parser.add_argument("--archive", required=True,
+    parser.add_argument("--archive",
                         help="the compressed image Imager downloads")
-    parser.add_argument("--url", required=True, help="where --archive will be served from")
+    parser.add_argument("--url", help="where --archive will be served from")
     parser.add_argument("--name", default="Raspberry Pi OS slim desktop (64-bit)")
     parser.add_argument("--description",
                         default="Raspberry Pi OS with the desktop, trimmed to fit 4GB storage")
     parser.add_argument("--icon",
                         default="https://downloads.raspberrypi.com/raspios_armhf/"
                                 "Raspberry_Pi_OS_(32-bit).png")
-    parser.add_argument("--release-date", required=True, help="YYYY-MM-DD")
+    parser.add_argument("--release-date", default="",
+                        help="YYYY-MM-DD (default: today, UTC)")
     parser.add_argument("--init-format", default="cloudinit-rpi",
                         choices=["cloudinit-rpi", "cloudinit", "systemd", "none"])
     parser.add_argument("--devices", default="pi4-64bit,pi3-64bit")
     parser.add_argument("--capabilities", default="rpi_connect",
                         help="comma separated, empty string for none")
     parser.add_argument("--website", default="")
+    parser.add_argument("--beta", action="store_true",
+                        help="pre-release: the name gets ' <timestamp> (Beta)' and "
+                             "the description the commit and run number")
+    parser.add_argument("--build-timestamp", default="",
+                        help="UTC timestamp for --beta, YYYYMMDD-HHMMSS (default: now)")
+    parser.add_argument("--commit", default="",
+                        help="short commit hash, mentioned by --beta")
+    parser.add_argument("--run-number", default="",
+                        help="workflow run number, mentioned by --beta")
+    parser.add_argument("--merge-from",
+                        help="an existing OS list whose entries are merged instead "
+                             "of measuring an archive; --archive/--url not needed")
+    parser.add_argument("--subitems-group",
+                        help="while merging, fold beta entries into a subitems "
+                             "folder of this name; other entries stay top-level")
+    parser.add_argument("--subitems-description",
+                        default="Pre-release builds, newest first.",
+                        help="description given to a newly created folder")
+    parser.add_argument("--subitems-limit", type=int, default=0,
+                        help="keep only the newest N entries in the folder (0 = all)")
     parser.add_argument("--merge-into",
                         help="an existing OS list to add this entry to; an entry "
                              "with the same name is replaced rather than duplicated")
     parser.add_argument("--output", default="-")
     args = parser.parse_args()
 
-    if args.image:
-        extract_size, extract_sha256 = os.path.getsize(args.image), sha256(args.image)
+    if args.merge_from:
+        with open(args.merge_from) as fh:
+            entries = list(flatten(json.load(fh).get("os_list", [])))
     else:
-        extract_size, extract_sha256 = measure_uncompressed(args.archive)
+        if not args.archive or not args.url:
+            parser.error("--archive and --url are required without --merge-from")
+        if args.image:
+            extract_size, extract_sha256 = os.path.getsize(args.image), sha256(args.image)
+        else:
+            extract_size, extract_sha256 = measure_uncompressed(args.archive)
 
-    entry = {
-        "name": args.name,
-        "description": args.description,
-        "icon": args.icon,
-        "url": args.url,
-        "extract_size": extract_size,
-        "extract_sha256": extract_sha256,
-        "image_download_size": os.path.getsize(args.archive),
-        "image_download_sha256": sha256(args.archive),
-        "release_date": args.release_date,
-        "init_format": args.init_format,
-        "devices": [d for d in args.devices.split(",") if d],
-        "capabilities": [c for c in args.capabilities.split(",") if c],
-    }
-    if args.website:
-        entry["website"] = args.website
+        name, description = args.name, args.description
+        if args.beta:
+            # "Foo (Beta)" becomes "Foo 20260818-080953 (Beta)", not
+            # "Foo (Beta) 20260818-080953 (Beta)".
+            if name.endswith(" (Beta)"):
+                name = name[:-len(" (Beta)")]
+            timestamp = args.build_timestamp or datetime.datetime.now(
+                datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+            name = f"{name} {timestamp} (Beta)"
+            tail = []
+            if args.commit:
+                tail.append(f"commit {args.commit}")
+            if args.run_number:
+                tail.append(f"workflow run #{args.run_number}")
+            info = "Pre-release build." + (f" {', '.join(tail)}." if tail else "")
+            description = f"{description} {info}".strip()
 
-    document = {"imager": {"devices": DEVICES}, "os_list": []}
+        entry = {
+            "name": name,
+            "description": description,
+            "icon": args.icon,
+            "url": args.url,
+            "extract_size": extract_size,
+            "extract_sha256": extract_sha256,
+            "image_download_size": os.path.getsize(args.archive),
+            "image_download_sha256": sha256(args.archive),
+            "release_date": args.release_date or datetime.datetime.now(
+                datetime.timezone.utc).strftime("%Y-%m-%d"),
+            "init_format": args.init_format,
+            "devices": [d for d in args.devices.split(",") if d],
+            "capabilities": [c for c in args.capabilities.split(",") if c],
+        }
+        if args.website:
+            entry["website"] = args.website
+        entries = [entry]
+
+    document = {"imager": {"devices": copy.deepcopy(DEVICES)}, "os_list": []}
     if args.merge_into and os.path.exists(args.merge_into):
         with open(args.merge_into) as fh:
             document = json.load(fh)
-        document.setdefault("imager", {"devices": DEVICES})
+        document.setdefault("imager", {"devices": copy.deepcopy(DEVICES)})
         document.setdefault("os_list", [])
-    document["os_list"] = [e for e in document["os_list"]
-                           if e.get("name") != entry["name"]] + [entry]
+    for entry in entries:
+        merge_entry(document, entry, args.subitems_group,
+                    args.subitems_description, args.subitems_limit)
+    # Folders read better after the releases they collect (stable sort keeps
+    # everything else in place).
+    document["os_list"].sort(key=lambda e: "subitems" in e)
+    add_referenced_devices(document)
 
     text = json.dumps(document, indent=2) + "\n"
     if args.output == "-":

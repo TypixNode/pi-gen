@@ -3,9 +3,13 @@ name: Build slim desktop image
 # The desktop image config-slim-desktop trims to fit 4GB storage, such as a
 # Compute Module 3's eMMC.
 #
-# A push builds it and moves the published OS list onto the result. A manual run
-# publishes its build release and leaves the OS list alone; add it to the list
-# with the "Append to OS list" workflow when you want Imager to offer it.
+# A push builds it and merges the result into the shared OS list on the
+# typixdeck-latest pointer release, next to the TypixDeck images, so one
+# custom repository URL offers everything. A manual run publishes its build
+# release and leaves the OS list alone; add it to the list with the "Append
+# to OS list" workflow when you want Imager to offer it.
+# (The old slim-desktop-latest pointer is no longer moved; it keeps serving
+# the last list published before the switch.)
 
 on:
   workflow_dispatch:
@@ -50,6 +54,7 @@ on:
       - 'slim-desktop-v*'
     branches:
       - 'cursor/**'
+      - typixdeck
     paths:
       - 'slim-desktop-stage/**'
       - 'config-slim-desktop'
@@ -72,8 +77,9 @@ jobs:
     with:
       variant: slim-desktop
       ref: ${{ inputs.ref || '' }}
-      # Only an automatic build keeps the published OS list current.
-      move_pointer: ${{ github.event_name == 'push' }}
+      # The os-list job below merges the entry into the shared typixdeck-latest
+      # pointer; move_pointer would clobber that list with just this build.
+      move_pointer: false
       session: ${{ inputs.session || 'wayland' }}
       browser: ${{ inputs.browser || 'chromium' }}
       extra_packages: ${{ inputs.extra_packages || '' }}
@@ -81,3 +87,70 @@ jobs:
       locale: ${{ inputs.locale || 'en_GB.UTF-8' }}
       timezone: ${{ inputs.timezone || 'Europe/London' }}
       compression: ${{ inputs.compression || 'xz' }}
+
+  os-list:
+    needs: build
+    # Only an automatic build keeps the published OS list current, as before.
+    if: ${{ !cancelled() && needs.build.result == 'success' && github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    # Shared with build-typixdeck.yml and append-os-list.yml runs that target
+    # the same pointer, so two download-merge-upload sequences never interleave.
+    concurrency:
+      group: os-list-typixdeck-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      POINTER_TAG: typixdeck-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: slim-desktop-metadata
+          path: artifacts/slim-desktop-metadata
+
+      - name: Merge the entry into the shared OS list
+        run: |
+          mkdir -p work
+          if gh release download "$POINTER_TAG" --pattern os_list.json --dir work; then
+            echo "merging into the existing list"
+          else
+            echo "no existing list at $POINTER_TAG, starting one"
+          fi
+
+          src=artifacts/slim-desktop-metadata/os_list.json
+          if [ ! -f "$src" ]; then
+            echo "the build produced no OS list entry; nothing to publish"
+            echo "SKIP_PUBLISH=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          # The slim entry keeps a stable name, so merging replaces the
+          # top-level entry in place; no Beta subitems folding needed.
+          ./scripts/make-os-list-json \
+            --merge-from "$src" \
+            --merge-into work/os_list.json \
+            --output work/os_list.json
+          cat work/os_list.json
+
+      - name: Publish the OS list
+        if: env.SKIP_PUBLISH != '1'
+        run: |
+          POINTER_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$POINTER_TAG"
+          if gh release view "$POINTER_TAG" >/dev/null 2>&1; then
+            :
+          else
+            {
+              echo 'OS list for Raspberry Pi Imager: TypixDeck and slim desktop images.'
+              echo
+              echo '```'
+              echo "rpi-imager --repo $POINTER_URL/os_list.json"
+              echo '```'
+            } > notes.md
+            gh release create "$POINTER_TAG" --prerelease --target "$GITHUB_SHA" \
+              --title "TypixDeck OS images (OS list for Raspberry Pi Imager)" \
+              --notes-file notes.md
+          fi
+          gh release upload "$POINTER_TAG" work/os_list.json --clobber

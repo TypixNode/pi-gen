@@ -1,7 +1,7 @@
 name: Build image
 
-# The build itself, called by the workflows that offer it: build-slim-desktop.yml
-# and build.yml. Not dispatchable on its own.
+# The build itself, called by the workflows that offer it: build-slim-desktop.yml,
+# build-typixdeck.yml and build.yml. Not dispatchable on its own.
 #
 # The runner is arm64, so the build is native rather than going through qemu.
 
@@ -9,15 +9,51 @@ on:
   workflow_call:
     inputs:
       variant:
-        description: slim-desktop, or the stock lite, desktop and full builds
+        description: slim-desktop, the stock lite, desktop and full builds, or any
+          custom variant when the config input names its config file
         type: string
         required: true
+      config:
+        description: pi-gen config file for a custom variant (e.g. config-typixdeck);
+          blank keeps the built-in variant handling
+        type: string
+        default: ''
       ref:
         description: Branch, tag or SHA to build; blank uses the calling ref
         type: string
         default: ''
       move_pointer:
         description: Point the published OS list at this build
+        type: boolean
+        default: false
+      pointer_tag:
+        description: Release tag that carries the published OS list
+        type: string
+        default: slim-desktop-latest
+      os_list_name:
+        description: Imager entry name for this build; blank generates os_list.json
+          only for the slim-desktop variant, as before
+        type: string
+        default: ''
+      os_list_description:
+        description: Imager entry second line, used with os_list_name
+        type: string
+        default: ''
+      os_list_devices:
+        description: Device tags for the Imager entry, comma separated
+        type: string
+        default: pi4-64bit,pi3-64bit
+      os_list_capabilities:
+        description: Imager capabilities for the entry, comma separated
+        type: string
+        default: ''
+      os_list_icon:
+        description: Icon URL for the Imager entry; blank uses the script default
+        type: string
+        default: ''
+      beta:
+        description: Mark the Imager entry as a pre-release; its name gets a UTC
+          timestamp and a (Beta) suffix, its description the commit and run number
         type: boolean
         default: false
       session:
@@ -58,6 +94,14 @@ jobs:
       TIMEZONE_DEFAULT: ${{ inputs.timezone }}
       DEPLOY_COMPRESSION: ${{ inputs.compression }}
       BUILD_VARIANT: ${{ inputs.variant }}
+      BUILD_CONFIG: ${{ inputs.config }}
+      POINTER_TAG: ${{ inputs.pointer_tag }}
+      OS_LIST_NAME: ${{ inputs.os_list_name }}
+      OS_LIST_DESCRIPTION: ${{ inputs.os_list_description }}
+      OS_LIST_DEVICES: ${{ inputs.os_list_devices }}
+      OS_LIST_CAPABILITIES: ${{ inputs.os_list_capabilities }}
+      OS_LIST_ICON: ${{ inputs.os_list_icon }}
+      OS_LIST_BETA: ${{ inputs.beta && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -76,6 +120,52 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
             /usr/local/share/boost || true
           df -h
+
+      # Package downloads are one of the biggest costs of a pi-gen run, so an
+      # apt-cacher-ng proxy on the runner is persisted between builds. The
+      # WORK_DIR rootfs is deliberately NOT cached: restoring a stale rootfs
+      # makes export-image partition for the old size, which a later
+      # dist-upgrade then overflows, and a single rootfs copy would eat most
+      # of the repository's 10GB cache quota by itself.
+      #
+      # The key ends in the run id so every run uploads its (grown) cache;
+      # restore-keys fall back to the newest cache of this variant, then of
+      # any variant on this architecture.
+      - name: Restore the apt package cache
+        uses: actions/cache@v4
+        with:
+          path: apt-cache
+          key: apt-cacher-ng-${{ runner.arch }}-${{ inputs.variant }}-${{ github.run_id }}
+          restore-keys: |
+            apt-cacher-ng-${{ runner.arch }}-${{ inputs.variant }}-
+            apt-cacher-ng-${{ runner.arch }}-
+
+      - name: Start apt-cacher-ng on port 9999
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends apt-cacher-ng
+          sudo systemctl stop apt-cacher-ng
+          # The daemon's cache directory is owned by its own user, which
+          # actions/cache cannot read or write, so the cache lives in the
+          # workspace between runs and is moved into place for the build
+          # (and back again in the last step of the job).
+          if [ -d apt-cache ]; then
+            sudo rm -rf /var/cache/apt-cacher-ng
+            sudo mv apt-cache /var/cache/apt-cacher-ng
+            sudo chown -R apt-cacher-ng:apt-cacher-ng /var/cache/apt-cacher-ng
+          fi
+          sudo sed -i 's/^Port:.*/Port: 9999/' /etc/apt-cacher-ng/acng.conf
+          # Tunnel https mirrors instead of refusing them; only http is cached,
+          # which covers the Raspberry Pi and Debian archives pi-gen uses.
+          printf 'PassThroughPattern: .*\n' |
+            sudo tee /etc/apt-cacher-ng/zz-ci.conf >/dev/null
+          sudo systemctl start apt-cacher-ng
+          curl --silent --fail http://127.0.0.1:9999/acng-report.html >/dev/null
+          # build.sh exports this to debootstrap (http_proxy) and writes it
+          # into the chroot's apt config; export-image removes it from the
+          # final image. The build is a native chroot sharing the runner's
+          # network stack, so 127.0.0.1 reaches the proxy from inside it.
+          echo "APT_PROXY=http://127.0.0.1:9999" >> "$GITHUB_ENV"
 
       - name: Install build dependencies
         run: |
@@ -125,8 +215,18 @@ jobs:
             sudo -E ./build.sh
             ;;
           *)
-            echo "unknown variant: $BUILD_VARIANT" >&2
-            exit 1
+            if [ -z "$BUILD_CONFIG" ]; then
+              echo "unknown variant: $BUILD_VARIANT (custom variants need the config input)" >&2
+              exit 1
+            fi
+            if [ ! -f "$BUILD_CONFIG" ]; then
+              echo "$BUILD_CONFIG is not in this ref; pick another variant" >&2
+              exit 1
+            fi
+            # A custom config's own final stage carries the EXPORT_IMAGE, so
+            # the stock stages must not export a second image.
+            touch stage2/SKIP_IMAGES stage4/SKIP_IMAGES stage5/SKIP_IMAGES
+            sudo -E ./build.sh -c "$BUILD_CONFIG"
             ;;
           esac
 
@@ -172,11 +272,15 @@ jobs:
           # is what moves instead.
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             BUILD_TAG="$GITHUB_REF_NAME"
+            if [ -n "$BUILD_CONFIG" ]; then
+              # One tag can build several variants of a matrix; give each its
+              # own release so their sha256sums and OS lists do not collide.
+              BUILD_TAG="$GITHUB_REF_NAME-$BUILD_VARIANT"
+            fi
           else
             BUILD_TAG="$BUILD_VARIANT-build-$(date -u +%Y%m%d)-${GITHUB_SHA:0:7}"
           fi
           echo "BUILD_TAG=$BUILD_TAG" >> "$GITHUB_ENV"
-          echo "POINTER_TAG=slim-desktop-latest" >> "$GITHUB_ENV"
 
           ARCHIVE="$(ls deploy/image_*.img.xz deploy/image_*.img.gz deploy/image_*.zip \
             deploy/*.img 2>/dev/null | head -1)"
@@ -207,6 +311,29 @@ jobs:
               --capabilities "$([ "$SLIM_RPI_CONNECT" = 1 ] && echo rpi_connect || echo '')" \
               --website "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
               --output release/os_list.json
+          elif [ -n "$OS_LIST_NAME" ]; then
+            EXTRA_ARGS=()
+            if [ -n "$OS_LIST_ICON" ]; then
+              EXTRA_ARGS+=(--icon "$OS_LIST_ICON")
+            fi
+            if [ "$OS_LIST_BETA" = 1 ]; then
+              EXTRA_ARGS+=(--beta \
+                --build-timestamp "$(date -u +%Y%m%d-%H%M%S)" \
+                --commit "${GITHUB_SHA:0:7}" \
+                --run-number "$GITHUB_RUN_NUMBER")
+            fi
+            ./scripts/make-os-list-json \
+              --image "$WORK_DIR"/export-image/*.img \
+              --archive "release/$ASSET" \
+              --url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$BUILD_TAG/$ASSET" \
+              --name "$OS_LIST_NAME" \
+              --description "$OS_LIST_DESCRIPTION" \
+              --release-date "$(date -u +%Y-%m-%d)" \
+              --devices "$OS_LIST_DEVICES" \
+              --capabilities "$OS_LIST_CAPABILITIES" \
+              --website "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              "${EXTRA_ARGS[@]}" \
+              --output release/os_list.json
           fi
 
           ( cd release && sha256sum ./* > sha256sums.txt )
@@ -226,6 +353,10 @@ jobs:
             if [ "$BUILD_VARIANT" = slim-desktop ]; then
               echo 'arm64 Raspberry Pi OS with the desktop, trimmed to fit 4GB storage'
               echo '(Compute Module 3 and up), built from `config-slim-desktop`.'
+            elif [ -n "$OS_LIST_NAME" ]; then
+              echo "$OS_LIST_DESCRIPTION"
+              echo
+              echo "Built from \`$BUILD_CONFIG\` at \`${GITHUB_SHA:0:7}\` (\`${GITHUB_REF_NAME}\`)."
             else
               echo "Stock pi-gen \`$BUILD_VARIANT\` image, built from \`${GITHUB_REF_NAME}\`."
             fi
@@ -344,6 +475,23 @@ jobs:
             echo "deleting superseded $old"
             gh release delete "$old" --yes --cleanup-tag
           done
+
+      # Runs even after a failed build: whatever apt-cacher-ng did download is
+      # still worth keeping. actions/cache uploads the directory in its post
+      # step, which runs after this one.
+      - name: Hand the apt cache back to actions/cache
+        if: always()
+        run: |
+          sudo systemctl stop apt-cacher-ng || true
+          # If the job died before the proxy was even set up, leave whatever
+          # the cache restored in place rather than uploading an empty one.
+          if [ -d /var/cache/apt-cacher-ng ]; then
+            rm -rf apt-cache
+            sudo mv /var/cache/apt-cacher-ng apt-cache
+            sudo chown -R "$(id -u):$(id -g)" apt-cache
+          fi
+          mkdir -p apt-cache
+          du -sh apt-cache || true
 
       - uses: actions/upload-artifact@v4
         with:
