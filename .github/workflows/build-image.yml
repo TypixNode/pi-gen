@@ -154,13 +154,25 @@ jobs:
             sudo mv apt-cache /var/cache/apt-cacher-ng
             sudo chown -R apt-cacher-ng:apt-cacher-ng /var/cache/apt-cacher-ng
           fi
-          sudo sed -i 's/^Port:.*/Port: 9999/' /etc/apt-cacher-ng/acng.conf
-          # Tunnel https mirrors instead of refusing them; only http is cached,
-          # which covers the Raspberry Pi and Debian archives pi-gen uses.
-          printf 'PassThroughPattern: .*\n' |
+          # The daemon reads every *.conf in the directory and the last value
+          # of a key wins, so an override file beats editing acng.conf in
+          # place (whose Port line may be commented out, which is why a sed
+          # on it silently left the daemon on 3142). PassThroughPattern
+          # tunnels https mirrors instead of refusing them; only http is
+          # cached, which covers the Raspberry Pi and Debian archives.
+          printf 'Port: 9999\nPassThroughPattern: .*\n' |
             sudo tee /etc/apt-cacher-ng/zz-ci.conf >/dev/null
           sudo systemctl start apt-cacher-ng
-          curl --silent --fail http://127.0.0.1:9999/acng-report.html >/dev/null
+          for i in $(seq 1 15); do
+            curl --silent --fail http://127.0.0.1:9999/acng-report.html >/dev/null && break
+            if [ "$i" = 15 ]; then
+              echo "apt-cacher-ng did not come up on port 9999" >&2
+              systemctl status apt-cacher-ng --no-pager || true
+              sudo journalctl -u apt-cacher-ng --no-pager | tail -30 || true
+              exit 1
+            fi
+            sleep 1
+          done
           # build.sh exports this to debootstrap (http_proxy) and writes it
           # into the chroot's apt config; export-image removes it from the
           # final image. The build is a native chroot sharing the runner's
