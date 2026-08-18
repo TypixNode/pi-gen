@@ -1,7 +1,7 @@
 # CyberFold (TypixDeck) → pi-gen 集成技术方案
 
 > 状态：待 review。日期：2026-08-18。
-> 目标仓库：`eggfly/pi-gen`（master，已含 CI workflows）。素材来源：`eggfly/CyberFold`。
+> 目标仓库：`TypixNode/pi-gen`（master，已含 CI workflows）。素材来源：`eggfly/CyberFold`。
 
 ---
 
@@ -162,7 +162,7 @@ Raspberry Pi OS（bookworm/trixie, labwc）的屏幕键盘是 **`squeekboard` + 
    - **不缓存 WORK_DIR**（§2.3 的坑）。
 2. 新增/改造 `build-typixdeck.yml`：matrix 两个变体，push tag `typixdeck-v*` 或手动触发；Beta 由 push 非 tag 分支触发。
 3. os_list 发布沿用现有机制：每次构建后合并进指针 Release（新建 `typixdeck-latest` tag）上的 `os_list.json`，稳定 URL 即"包地址 JSON"：
-   `https://github.com/eggfly/pi-gen/releases/download/typixdeck-latest/os_list.json`
+   `https://github.com/TypixNode/pi-gen/releases/download/typixdeck-latest/os_list.json`
 4. os_list.json 顶层增加 `imager.devices[]`：定义 `TypixDeck`（及后续 CardputerZero / CM4Stack）设备条目，icon PNG 放仓库内用 raw URL 或 Release asset。OS 条目结构：正式版置顶 + 按时间倒序的 Beta 子列表（`subitems` 折叠，模仿官方仓库层级）。
 
 ### 3.4 已确认的 apt 包清单（来自 CyberFold 文档/脚本）

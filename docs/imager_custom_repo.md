@@ -13,7 +13,7 @@
 仓库地址（稳定 URL，始终指向最新构建）：
 
 ```
-https://github.com/eggfly/pi-gen/releases/download/typixdeck-latest/os_list.json
+https://github.com/TypixNode/pi-gen/releases/download/typixdeck-latest/os_list.json
 ```
 
 ### 方式 A：图形界面
@@ -26,7 +26,7 @@ https://github.com/eggfly/pi-gen/releases/download/typixdeck-latest/os_list.json
 ### 方式 B：命令行
 
 ```bash
-rpi-imager --repo https://github.com/eggfly/pi-gen/releases/download/typixdeck-latest/os_list.json
+rpi-imager --repo https://github.com/TypixNode/pi-gen/releases/download/typixdeck-latest/os_list.json
 ```
 
 ## 二、选择设备和镜像
@@ -46,7 +46,7 @@ rpi-imager --repo https://github.com/eggfly/pi-gen/releases/download/typixdeck-l
 CI 只保留每个变体**最近 5 个** Beta 构建的 Release，`os_list.json` 中的 Beta 子目录也同步只列最近 5 个。更早的 Beta 下载链接会失效（404）。如果想长期固定某一个构建，可以使用该构建自己 Release 页面里的 `os_list.json`（镜像和校验和永不变化）：
 
 ```bash
-rpi-imager --repo https://github.com/eggfly/pi-gen/releases/download/<构建tag>/os_list.json
+rpi-imager --repo https://github.com/TypixNode/pi-gen/releases/download/<构建tag>/os_list.json
 ```
 
 ## 附：os_list.json 的 `imager.devices` 字段说明
@@ -58,7 +58,7 @@ rpi-imager --repo https://github.com/eggfly/pi-gen/releases/download/<构建tag>
   "name": "TypixDeck",
   "tags": ["typixdeck"],
   "default": true,
-  "icon": "https://raw.githubusercontent.com/eggfly/pi-gen/typixdeck/imager/typixdeck-icon.png",
+  "icon": "https://raw.githubusercontent.com/TypixNode/pi-gen/typixdeck/imager/typixdeck-icon.png",
   "description": "Foldable cyberdeck based on the Raspberry Pi CM4/CM5 with a 1024x768 DPI touchscreen",
   "matching_type": "exclusive",
   "capabilities": []

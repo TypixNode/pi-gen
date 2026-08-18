@@ -97,7 +97,7 @@ EXTRA_DEVICES = {
         "name": "TypixDeck",
         "tags": ["typixdeck"],
         "default": True,
-        "icon": "https://raw.githubusercontent.com/eggfly/pi-gen/typixdeck/"
+        "icon": "https://raw.githubusercontent.com/TypixNode/pi-gen/typixdeck/"
                 "imager/typixdeck-icon.png",
         "description": "Foldable cyberdeck based on the Raspberry Pi CM4/CM5 "
                        "with a 1024x768 DPI touchscreen",
