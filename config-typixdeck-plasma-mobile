@@ -1,0 +1,17 @@
+# TypixDeck KDE Plasma Mobile variant (Beta).
+# Build with:  sudo ./build.sh -c config-typixdeck-plasma-mobile
+# See plasma-mobile-stage/README.md for details and known issues.
+
+IMG_NAME="raspios-trixie-arm64-typixdeck-plasma-mobile"
+RELEASE=trixie
+ARCH=arm64
+STAGE_LIST="stage0 stage1 stage2 plasma-mobile-stage typixdeck-stage"
+DEPLOY_COMPRESSION=xz
+
+# stage2 ships an EXPORT_IMAGE (the Lite image). We only want the final image,
+# which is exported by typixdeck-stage, so use pi-gen's SKIP_IMAGES mechanism
+# to keep stage2 out of the export list. This config is sourced by build.sh
+# after BASE_DIR is set, so creating the (gitignored) marker here makes the
+# variant self-contained. Note: the marker persists in the working tree until
+# removed, which also skips the Lite export for later builds of other configs.
+touch "${BASE_DIR}/stage2/SKIP_IMAGES"
