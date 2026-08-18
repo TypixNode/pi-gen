@@ -1,8 +1,9 @@
 name: Build TypixDeck image
 
-# The image variants for the TypixDeck, a foldable CM4/CM5 cyberdeck with a
-# 1024x768 DPI touchscreen: the stock Raspberry Pi desktop plus the
-# typixdeck-stage hardware support, and a KDE Plasma Mobile variant.
+# The image variants for the TypixDeck, a foldable CM3/CM4/CM5 cyberdeck with
+# a 1024x768 DPI touchscreen: the stock Raspberry Pi desktop plus the
+# typixdeck-stage hardware support, a slim desktop that fits a Compute
+# Module 3's 4GB eMMC, and a KDE Plasma Mobile variant.
 #
 # A push of a typixdeck-v* tag builds a formal release. A push to the
 # typixdeck branch (based on the arm64 branch, whose build.sh targets arm64)
@@ -17,7 +18,7 @@ on:
       variant:
         description: Which variant to build
         type: choice
-        options: [all, typixdeck, typixdeck-plasma-mobile]
+        options: [all, typixdeck, typixdeck-slim, typixdeck-plasma-mobile]
         default: all
       ref:
         description: Branch, tag or SHA to build (blank = the one selected above)
@@ -53,7 +54,7 @@ jobs:
       matrix:
         variant: ${{ (github.event_name == 'workflow_dispatch' && inputs.variant != 'all')
           && fromJSON(format('["{0}"]', inputs.variant))
-          || fromJSON('["typixdeck", "typixdeck-plasma-mobile"]') }}
+          || fromJSON('["typixdeck", "typixdeck-slim", "typixdeck-plasma-mobile"]') }}
     uses: ./.github/workflows/build-image.yml
     with:
       variant: ${{ matrix.variant }}
@@ -69,10 +70,14 @@ jobs:
       # non-tag builds of either variant with the timestamp and commit.
       os_list_name: ${{ matrix.variant == 'typixdeck'
         && 'Raspberry Pi OS Desktop (Trixie arm64) for TypixDeck'
-        || 'Raspberry Pi OS + KDE Plasma Mobile (Trixie arm64) for TypixDeck (Beta)' }}
+        || (matrix.variant == 'typixdeck-slim'
+        && 'Raspberry Pi OS Slim Desktop (Trixie arm64) for TypixDeck'
+        || 'Raspberry Pi OS + KDE Plasma Mobile (Trixie arm64) for TypixDeck (Beta)') }}
       os_list_description: ${{ matrix.variant == 'typixdeck'
         && 'Debian Trixie arm64 with Raspberry Pi Desktop, for TypixDeck.'
-        || 'Debian Trixie arm64 with KDE Plasma Mobile 6 touch UI, for TypixDeck. Pre-release.' }}
+        || (matrix.variant == 'typixdeck-slim'
+        && 'Debian Trixie arm64 slim desktop for TypixDeck on Compute Module 3, fits 4GB eMMC.'
+        || 'Debian Trixie arm64 with KDE Plasma Mobile 6 touch UI, for TypixDeck. Pre-release.') }}
       os_list_devices: typixdeck
       # rpi-connect is removed from these images, so no rpi_connect here.
       os_list_capabilities: ''
@@ -116,13 +121,15 @@ jobs:
           fi
 
           found=0
-          # Desktop first, so it sits above Plasma Mobile in a fresh list.
-          for variant in typixdeck typixdeck-plasma-mobile; do
+          # Desktop first, then slim, then Plasma Mobile in a fresh list.
+          for variant in typixdeck typixdeck-slim typixdeck-plasma-mobile; do
             src="artifacts/$variant-metadata/os_list.json"
             [ -f "$src" ] || continue
             found=1
             if [ "$variant" = typixdeck ]; then
               GROUP="Raspberry Pi OS Desktop for TypixDeck (Beta builds)"
+            elif [ "$variant" = typixdeck-slim ]; then
+              GROUP="Raspberry Pi OS Slim Desktop for TypixDeck (Beta builds)"
             else
               GROUP="Raspberry Pi OS + KDE Plasma Mobile for TypixDeck (Beta builds)"
             fi

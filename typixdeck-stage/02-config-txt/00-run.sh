@@ -38,6 +38,8 @@ enable_uart=0
 dtoverlay=pwm-backlight-3inch2-rp1
 [cm4]
 dtoverlay=pwm-backlight-3inch2-bcm
+[pi3]
+dtoverlay=pwm-backlight-3inch2-bcm
 [pi0]
 dtoverlay=pwm-backlight-3inch2-bcm
 

@@ -1,7 +1,7 @@
 name: Build image
 
-# The build itself, called by the workflows that offer it: build-slim-desktop.yml,
-# build-typixdeck.yml and build.yml. Not dispatchable on its own.
+# The build itself, called by the workflows that offer it: build-typixdeck.yml
+# and build.yml. Not dispatchable on its own.
 #
 # The runner is arm64, so the build is native rather than going through qemu.
 
@@ -9,8 +9,8 @@ on:
   workflow_call:
     inputs:
       variant:
-        description: slim-desktop, the stock lite, desktop and full builds, or any
-          custom variant when the config input names its config file
+        description: the stock lite, desktop and full builds, or any custom
+          variant when the config input names its config file
         type: string
         required: true
       config:
@@ -29,7 +29,7 @@ on:
       pointer_tag:
         description: Release tag that carries the published OS list
         type: string
-        default: slim-desktop-latest
+        default: typixdeck-latest
       os_list_name:
         description: Imager entry name for this build; blank generates os_list.json
           only for the slim-desktop variant, as before
@@ -203,15 +203,6 @@ jobs:
           # Every variant is arranged to export exactly one image, so that the
           # later steps have one thing to verify and publish.
           case "$BUILD_VARIANT" in
-          slim-desktop)
-            if [ ! -f config-slim-desktop ]; then
-              echo "config-slim-desktop is not present in the ref being built." >&2
-              echo "Set this workflow's ref input to a branch that carries it." >&2
-              exit 1
-            fi
-            touch stage2/SKIP_IMAGES
-            sudo -E ./build.sh -c config-slim-desktop
-            ;;
           lite)
             touch stage3/SKIP stage4/SKIP stage5/SKIP
             touch stage4/SKIP_IMAGES stage5/SKIP_IMAGES

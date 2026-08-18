@@ -52,7 +52,7 @@ on:
       pointer_tag:
         description: Release that holds the OS list
         type: string
-        default: slim-desktop-latest
+        default: typixdeck-latest
 
 concurrency:
   group: os-list-${{ inputs.pointer_tag }}

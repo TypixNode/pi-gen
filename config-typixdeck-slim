@@ -1,0 +1,60 @@
+# TypixDeck slim variant: the trimmed desktop that fits a Compute Module 3's
+# 4GB eMMC, plus the full TypixDeck hardware support (DPI panel, GT911 touch,
+# PWM backlight, brightness tray, flashing tools).
+#
+#   sudo ./build.sh -c config-typixdeck-slim
+#
+# slim-desktop-stage trims the Lite rootfs and installs the Raspberry Pi
+# Desktop from the individual packages behind the rpd-* metapackages;
+# typixdeck-stage then runs on top of it, so nothing it installs can be
+# swept up by the slim purge.
+
+IMG_NAME="raspios-trixie-arm64-typixdeck-slim"
+RELEASE="trixie"
+ARCH="arm64"
+
+STAGE_LIST="stage0 stage1 stage2 slim-desktop-stage typixdeck-stage"
+
+TARGET_HOSTNAME="${TARGET_HOSTNAME:-typixdeck}"
+
+# Neutral defaults; Raspberry Pi Imager's advanced options override them all.
+LOCALE_DEFAULT="${LOCALE_DEFAULT:-en_US.UTF-8}"
+KEYBOARD_KEYMAP="${KEYBOARD_KEYMAP:-us}"
+KEYBOARD_LAYOUT="${KEYBOARD_LAYOUT:-English (US)}"
+TIMEZONE_DEFAULT="${TIMEZONE_DEFAULT:-Etc/UTC}"
+
+DEPLOY_COMPRESSION="${DEPLOY_COMPRESSION:-xz}"
+
+# Small boot partition and tight root margins, sized for the 4GB module
+# (see the old config-slim-desktop rationale, which these values carry over).
+BOOT_SIZE="${BOOT_SIZE:-$((256 * 1024 * 1024))}"
+ROOT_MARGIN_PERCENT="${ROOT_MARGIN_PERCENT:-12}"
+ROOT_MARGIN_FIXED="${ROOT_MARGIN_FIXED:-$((200 * 1024 * 1024))}"
+
+# cloud-init is what applies Raspberry Pi Imager's advanced options on Trixie
+# (the os-list entry declares init_format: cloudinit-rpi).
+ENABLE_CLOUD_INIT="${ENABLE_CLOUD_INIT:-1}"
+
+# --- slim-desktop-stage knobs ---
+# Exported because the stage scripts run as child processes.
+
+export SLIM_DESKTOP_SESSION="${SLIM_DESKTOP_SESSION:-wayland}"
+export SLIM_BROWSER="${SLIM_BROWSER:-chromium}"
+export SLIM_STRIP_DOCS="${SLIM_STRIP_DOCS:-1}"
+# typixdeck-stage purges rpi-connect anyway; not installing it in the first
+# place saves the ~25MB and keeps the purge a no-op.
+export SLIM_RPI_CONNECT="${SLIM_RPI_CONNECT:-0}"
+export SLIM_APT_TRIM="${SLIM_APT_TRIM:-1}"
+export SLIM_DROP_FOREIGN_ARCH="${SLIM_DROP_FOREIGN_ARCH:-1}"
+# BCM43438/43455 covers the CM3/CM4 wireless variants.
+export SLIM_KEEP_FIRMWARE="${SLIM_KEEP_FIRMWARE-firmware-brcm80211}"
+# rpi-v8 boots BCM2837 (CM3) and BCM2711 (CM4); the CM5 build is the
+# non-slim config-typixdeck.
+export SLIM_KEEP_KERNEL="${SLIM_KEEP_KERNEL:-rpi-v8}"
+export SLIM_KEEP_TOOLCHAIN="${SLIM_KEEP_TOOLCHAIN:-1}"
+export SLIM_EXTRA_PACKAGES="${SLIM_EXTRA_PACKAGES-}"
+
+# Both stage2 and slim-desktop-stage carry an EXPORT_IMAGE; the only image
+# this variant exports is typixdeck-stage's. SKIP_IMAGES is gitignored and
+# build-local (remove the files to get the intermediate images back).
+touch "${BASE_DIR}/stage2/SKIP_IMAGES" "${BASE_DIR}/slim-desktop-stage/SKIP_IMAGES"

@@ -145,7 +145,10 @@ Raspberry Pi OS（bookworm/trixie, labwc）的屏幕键盘是 **`squeekboard` + 
 | 变体 | stage 组合 | IMG_NAME | Imager 显示名 |
 |------|-----------|----------|----------------------|
 | 官方桌面 | stage0–4 + typixdeck-stage | `raspios-trixie-arm64-typixdeck` | `Raspberry Pi OS Desktop (Trixie arm64) for TypixDeck` — "Debian Trixie arm64 with Raspberry Pi Desktop, for TypixDeck." |
+| Slim（CM3 4GB eMMC） | stage0–2 + slim-desktop-stage + typixdeck-stage | `raspios-trixie-arm64-typixdeck-slim` | `Raspberry Pi OS Slim Desktop (Trixie arm64) for TypixDeck` — "Slim desktop for TypixDeck on Compute Module 3, fits 4GB eMMC." |
 | Plasma Mobile | stage0–2 + plasma-mobile-stage + typixdeck-stage | `raspios-trixie-arm64-typixdeck-plasma-mobile` | `Raspberry Pi OS + KDE Plasma Mobile (Trixie arm64) for TypixDeck (Beta)` — "KDE Plasma Mobile 6 touch UI. Pre-release." |
+
+（2026-08-18 决议：slim 并入 TypixDeck 变体家族，独立的 `config-slim-desktop` / `build-slim-desktop.yml` 已退役；单分支 `typixdeck`、单 workflow、单 os_list。）
 
 - 新建 `plasma-mobile-stage/`：`plasma-mobile plasma-mobile-tweaks plasma-settings sddm kscreen` + `graphical.target`，sddm 自动登录，渲染后端预设写好（规避 §2.2 的已知问题）。
 - 每变体一个 config 文件（`config-typixdeck`、`config-typixdeck-plasma-mobile`），`IMG_NAME`/`RELEASE=trixie`/`ARCH=arm64`。

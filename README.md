@@ -422,12 +422,12 @@ The stage 4 desktop image has outgrown small storage: it is 6.5GB, and the
 Bookworm and Bullseye images before it were 6.2GB and 4.3GB, so none of them can
 be written to a 4GB eMMC module such as a Compute Module 3.
 
-`config-slim-desktop` builds a desktop image that fits, by replacing stages 3 to
-5 with `slim-desktop-stage`:
+`config-typixdeck-slim` builds a desktop image that fits, by replacing stages 3
+to 5 with `slim-desktop-stage` (and adding the TypixDeck hardware support from
+`typixdeck-stage` on top):
 
 ```bash
-touch ./stage2/SKIP_IMAGES
-sudo ./build.sh -c config-slim-desktop
+sudo ./build.sh -c config-typixdeck-slim
 ```
 
 The `rpd-*` metapackages that stage 3 and stage 4 install carry no `Depends`,
@@ -439,7 +439,7 @@ then installs a single desktop session, the theme, the control panels, one
 browser and the everyday utilities. `build-essential` and the headers for the
 kernel that stays are kept, so out-of-tree modules can still be built on the
 device; `SLIM_KEEP_TOOLCHAIN=0` reclaims those too. All the knobs are documented
-in `config-slim-desktop`.
+in `config-typixdeck-slim`.
 
 `scripts/verify-slim-image` checks a built image against what this configuration
 and its published OS list entry promise, and is what the build runs before

@@ -33,7 +33,8 @@ rpi-imager --repo https://github.com/TypixNode/pi-gen/releases/download/typixdec
 
 1. 点击 **CHOOSE DEVICE（选择设备）**，列表第一项即为 **TypixDeck**（带图标和描述，默认选中）；
 2. 点击 **CHOOSE OS（选择镜像）**，会看到：
-   - **Raspberry Pi OS Desktop (Trixie arm64) for TypixDeck** —— 正式版（由 `typixdeck-v*` tag 构建）；
+   - **Raspberry Pi OS Desktop (Trixie arm64) for TypixDeck** —— 正式版（由 `typixdeck-v*` tag 构建），面向 CM4/CM5；
+   - **Raspberry Pi OS Slim Desktop (Trixie arm64) for TypixDeck** —— 裁剪版桌面，适配 Compute Module 3 的 4GB eMMC（约 3GB 镜像），同样带全套 TypixDeck 硬件支持；
    - **Raspberry Pi OS + KDE Plasma Mobile (Trixie arm64) for TypixDeck (Beta)** —— Plasma Mobile 变体，触摸优先界面，**始终标记为 Beta**（KMS 驱动下已知有渲染问题，见构建方案文档）；
    - **… (Beta builds)** 文件夹 —— 每个变体各有一个折叠子目录，按时间倒序存放历史 Beta 构建。Beta 条目名称形如
      `Raspberry Pi OS Desktop (Trixie arm64) for TypixDeck 20260818-080953 (Beta)`（UTC 构建时间戳），描述中带有构建来源信息（`Pre-release build. commit <sha7>, workflow run #<编号>.`），方便反馈问题时精确定位到构建；
