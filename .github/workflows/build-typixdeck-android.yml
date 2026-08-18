@@ -17,8 +17,12 @@ name: Build TypixDeck Android image
 on:
   workflow_dispatch:
     inputs:
+      # KonstaKANG hosts the zips on Filen, whose share links decrypt in the
+      # browser and cannot be curled; download the zip manually, park it on a
+      # release of this repo (gh release create android-src --prerelease;
+      # gh release upload android-src lineage-*.zip) and pass that asset URL.
       image_url:
-        description: Direct download URL of the KonstaKANG lineage-*.zip
+        description: Direct (curl-able) URL of the KonstaKANG lineage-*.zip
         type: string
         required: true
       image_sha256:
