@@ -13,6 +13,17 @@ Lite/Desktop images are not exported as well.
 
 ## Sub-stages
 
+### `00-install-kernel`
+
+Optionally installs the TypixDeck kernel: rpi-6.18.y plus the dwc2 ISO-OUT
+split fix (`drivers/usb/dwc2/hcd_queue.c`), which is what makes USB audio
+behind the FE2.1 hub work on the CM5 carrier. The `.deb` files come from
+`make bindeb-pkg` in the patched kernel tree and are too big for git; drop
+them into `00-install-kernel/files/debs/` before building. Without them the
+step logs a warning and keeps the stock kernel (fine for everything except
+that USB audio path); set `TYPIXDECK_REQUIRE_KERNEL=1` to make a missing
+deb fatal for factory builds.
+
 ### `00-install-packages`
 
 Utility and tooling packages: `device-tree-compiler` (needed by

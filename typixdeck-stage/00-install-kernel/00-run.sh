@@ -12,9 +12,17 @@ DEB_DIR="files/debs"
 IMAGE_DEB="$(ls "${DEB_DIR}"/linux-image-*dwc2fix*_arm64.deb 2>/dev/null | head -n1 || true)"
 
 if [ -z "${IMAGE_DEB}" ]; then
-	echo "ERROR: no linux-image .deb in ${STAGE_WORK_DIR:-$(pwd)}/${DEB_DIR}" >&2
-	echo "Build it with 'make bindeb-pkg' in the patched kernel tree first." >&2
-	exit 1
+	if [ "${TYPIXDECK_REQUIRE_KERNEL:-0}" = "1" ]; then
+		echo "ERROR: no linux-image .deb in ${STAGE_WORK_DIR:-$(pwd)}/${DEB_DIR}" >&2
+		echo "Build it with 'make bindeb-pkg' in the patched kernel tree first." >&2
+		exit 1
+	fi
+	# The debs are too big for git and are not available in CI, so the stock
+	# kernel is kept: everything but USB audio behind the FE2.1 hub on the
+	# CM5 carrier works with it. Set TYPIXDECK_REQUIRE_KERNEL=1 (factory
+	# builds) to make a missing deb fatal instead.
+	echo "WARNING: no dwc2fix kernel .deb in ${DEB_DIR}; keeping the stock kernel." >&2
+	exit 0
 fi
 
 install -d "${ROOTFS_DIR}/var/tmp/typixdeck-debs"
