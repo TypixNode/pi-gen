@@ -1,31 +1,31 @@
-# TypixDeck OS: Raspberry Pi OS Trixie (arm64) for the TypixDeck / TypixNode
-# handheld (Compute Module 5 carrier board), with:
+# TypixDeck: Raspberry Pi OS Desktop (Trixie, arm64) for the TypixDeck
+# handheld (CM5 carrier board; CM4/Zero-class modules also supported by the
+# overlays), i.e. the stock stage0-4 desktop plus typixdeck-stage:
 #
-#   * the slim labwc desktop from slim-desktop-stage (~3GB image),
-#   * a custom kernel (rpi-6.18.y + the dwc2 ISO-OUT split fix that makes USB
-#     audio behind the on-board FE2.1 hub work) installed by typixdeck-stage,
-#   * the 3.2" 1024x768 DPI panel and GT911 touch overlays preloaded,
-#   * cloud-init kept enabled so Raspberry Pi Imager's advanced options
-#     (hostname, user, password, Wi-Fi, SSH, locale) keep working
-#     (`init_format: cloudinit-rpi` in the os-list entry).
+#   * 3.2" 1024x768 DPI panel + GT911 touch + PWM backlight overlays,
+#     compiled from source and enabled in config.txt,
+#   * backlight brightness tray applet in the wf-panel tray,
+#   * MCU firmware + flashing tools in /opt/typixdeck/firmware,
+#   * rpi-connect(-lite) and squeekboard/wfplug-squeek removed.
 #
 #   sudo ./build.sh -c config-typixdeck        # native arm64 host
-#   ./build-docker.sh -c config-typixdeck      # in Docker (e.g. Apple Silicon)
+#   ./build-docker.sh -c config-typixdeck      # in Docker
 #
-# Before building, drop the kernel .debs into
-# typixdeck-stage/00-install-kernel/files/debs/ (see typixdeck-stage/README.md).
-#
-# Add `touch stage2/SKIP_IMAGES slim-desktop-stage/SKIP_IMAGES` if you only
-# want the final TypixDeckOS image and not the intermediate Lite/slim ones.
+# NOTE on the architecture: pi-gen hardcodes ARCH per branch (master builds
+# armhf, the arm64/typixdeck branches build arm64). This config lives on the
+# typixdeck branch, whose build.sh targets arm64, so it works as-is; do not
+# build it from a master checkout. ARCH below is declarative; the explicit
+# IMG_NAME keeps the artifact name right either way.
 
-IMG_NAME="${IMG_NAME:-TypixDeckOS}"
-RELEASE="${RELEASE:-trixie}"
+IMG_NAME="raspios-trixie-arm64-typixdeck"
+RELEASE="trixie"
+ARCH="arm64"
 
-STAGE_LIST="stage0 stage1 stage2 slim-desktop-stage typixdeck-stage"
+STAGE_LIST="stage0 stage1 stage2 stage3 stage4 typixdeck-stage"
 
 TARGET_HOSTNAME="${TARGET_HOSTNAME:-typixdeck}"
 
-# Neutral defaults; Imager's advanced options override all of them on flash.
+# Neutral defaults; Raspberry Pi Imager's advanced options override them all.
 LOCALE_DEFAULT="${LOCALE_DEFAULT:-en_US.UTF-8}"
 KEYBOARD_KEYMAP="${KEYBOARD_KEYMAP:-us}"
 KEYBOARD_LAYOUT="${KEYBOARD_LAYOUT:-English (US)}"
@@ -36,29 +36,18 @@ TIMEZONE_DEFAULT="${TIMEZONE_DEFAULT:-Etc/UTC}"
 FIRST_USER_NAME="${FIRST_USER_NAME:-pi}"
 
 # cloud-init is what applies Imager's customisation on Trixie; never disable
-# it for a published image (see stage2/04-cloud-init and config-slim-desktop).
+# it for a published image.
 ENABLE_CLOUD_INIT="${ENABLE_CLOUD_INIT:-1}"
 
 # Raspberry Pi Imager consumes .img.xz directly.
 DEPLOY_COMPRESSION="${DEPLOY_COMPRESSION:-xz}"
 
-# One kernel flavour, small boot partition (same reasoning as the slim config).
-BOOT_SIZE="${BOOT_SIZE:-$((256 * 1024 * 1024))}"
-ROOT_MARGIN_PERCENT="${ROOT_MARGIN_PERCENT:-12}"
-ROOT_MARGIN_FIXED="${ROOT_MARGIN_FIXED:-$((200 * 1024 * 1024))}"
-
-# --- slim-desktop-stage knobs, tuned for the CM5 ------------------------------
-# labwc (Wayland) session, like the stock Trixie desktop.
-export SLIM_DESKTOP_SESSION="${SLIM_DESKTOP_SESSION:-wayland}"
-export SLIM_BROWSER="${SLIM_BROWSER:-chromium}"
-# CM5 is BCM2712: keep the rpi-2712 stock kernel as the fallback flavour and
-# drop rpi-v8 (typixdeck-stage installs the dwc2fix kernel on top).
-export SLIM_KEEP_KERNEL="${SLIM_KEEP_KERNEL:-rpi-2712}"
-# BCM43455 on-module radio.
-export SLIM_KEEP_FIRMWARE="${SLIM_KEEP_FIRMWARE-firmware-brcm80211}"
-export SLIM_STRIP_DOCS="${SLIM_STRIP_DOCS:-1}"
-export SLIM_APT_TRIM="${SLIM_APT_TRIM:-1}"
-export SLIM_DROP_FOREIGN_ARCH="${SLIM_DROP_FOREIGN_ARCH:-1}"
-export SLIM_RPI_CONNECT="${SLIM_RPI_CONNECT:-1}"
-export SLIM_KEEP_TOOLCHAIN="${SLIM_KEEP_TOOLCHAIN:-1}"
-export SLIM_EXTRA_PACKAGES="${SLIM_EXTRA_PACKAGES-}"
+# Only export the final typixdeck-stage image: stage2 (Lite) and stage4
+# (Desktop) also carry EXPORT_IMAGE files, and build.sh exports every stage
+# in STAGE_LIST that has one unless a SKIP_IMAGES file sits next to it.
+# SKIP_IMAGES is a build-local knob (see .gitignore and README.md), so create
+# the files here at build time instead of committing them - committed ones
+# would break the stock Lite/Desktop builds from this same tree.
+# (Remove them with `rm -f stage2/SKIP_IMAGES stage4/SKIP_IMAGES` before
+# building a stock image from this checkout again.)
+touch "${BASE_DIR}/stage2/SKIP_IMAGES" "${BASE_DIR}/stage4/SKIP_IMAGES"

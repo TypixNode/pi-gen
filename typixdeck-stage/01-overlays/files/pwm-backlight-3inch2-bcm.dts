@@ -1,0 +1,73 @@
+// pwm-backlight-3inch2-bcm.dts — TypixDeck 3.2" 背光 PWM 调光（BCM283x 系）
+//
+// 适用：CM0/CM1(Zero 系)、CM3(BCM2837)、CM4(BCM2711)——PWM 外设都是
+// SoC 内 pwm@7e20c000（bcm2835-pwm），GPIO18 = ALT5 = PWM0 通道 0。
+// ⚠️ #pwm-cells=3（2026-08-18 CM0 kernel 6.18 实测；旧注释写 2 是错的——
+// 2-cell 会 probe 报 "unable to request PWM" -EINVAL，且 panel 因等背光
+// 永久 defer → vc4 无限重绑定风暴 → 黑屏 + dmesg 被 input 注册刷爆）。
+// CM5(BCM2712/RP1) 用 pwm-backlight-3inch2-rp1.dts，两代绑定不兼容（cells/通道/pinctrl 全不同）。
+//
+// 硬件链路（0720 网表）：Pi GPIO18 (CN1.49) → R158(0Ω) → PI_LCD_BL
+//   → U70 MUX(NC, MUX_SEL=0=Pi 侧) → LCD_BL → U55 SY7201ABC EN/PWM。
+//   R102 100k 上拉 3V3：GPIO18 悬空时背光常亮（failsafe）。
+// 周期 50000ns = 20kHz（避开可闻频段；SY7201 PWM 调光支持范围内）。
+//
+// 编译：dtc -@ -I dts -O dtb -o pwm-backlight-3inch2-bcm.dtbo pwm-backlight-3inch2-bcm.dts
+// 配套：gt911 overlay 已移除 gpio-backlight（同一 GPIO 不能两个驱动抢）。
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2835";
+
+	fragment@0 {
+		target = <&gpio>;
+		__overlay__ {
+			pwm_bl_pins: pwm_bl_pins {
+				brcm,pins = <18>;
+				brcm,function = <2>;	/* ALT5 = PWM0 通道 0 */
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&pwm>;
+		__overlay__ {
+			status = "okay";
+			pinctrl-names = "default";
+			pinctrl-0 = <&pwm_bl_pins>;
+			assigned-clock-rates = <100000000>;	/* PWM 时钟 100MHz，与官方 pwm overlay 一致；50000ns 周期 = 5000 级分辨率 */
+		};
+	};
+
+	fragment@2 {
+		target-path = "/";
+		__overlay__ {
+			/* label 不叫 backlight_pwm：避免与 vc4-kms-dpi overlay 导出的
+			   同名 __symbols__ 冲突；节点名保持 backlight_pwm（决定 /sys 路径） */
+			bl_pwm: backlight_pwm {
+				compatible = "pwm-backlight";
+				pwms = <&pwm 0 50000 0>;	/* 通道 0，20kHz，极性 normal（#pwm-cells=3） */
+				brightness-levels = <0 6 8 12 16 24 32 40 48 64 96 128 160 192 224 255>;
+				default-brightness-level = <15>;	/* 开机全亮，与旧 gpio-backlight 行为一致 */
+			};
+		};
+	};
+
+	/* 挂到 DPI panel 上：DRM 使能面板时自动开背光（否则 pwm-backlight
+	   开机检测到 PWM 硬件为关 → bl_power=4 电源关，屏幕黑，CM5 实测踩坑）。
+	   ⚠️ 因此本 overlay 必须在 vc4-kms-dpi-3inch2 之后加载（/panel 要先存在），
+	   config.txt 里要放在 [all] 显示 overlay 之后的条件段里。 */
+	fragment@3 {
+		target-path = "/panel";
+		__overlay__ {
+			backlight = <&bl_pwm>;
+		};
+	};
+
+	/* 注意：BCM283x 的 PWM 外设与固件模拟音频（snd_bcm2835 耳机路径）共用。
+	   config.txt 里不要开 dtparam=audio=on，否则两者抢 PWM 硬件。
+	   本板音频走 USB(UAC)/I2S，本来就不需要 audio=on。
+	   （不用 /chosen bootargs 片段来关——固件在 overlay 之后用 cmdline.txt
+	   覆盖 bootargs，overlay 写进去的会被冲掉，不可靠。） */
+};

@@ -1,0 +1,65 @@
+// pwm-backlight-3inch2-rp1.dts — TypixDeck 3.2" 背光 PWM 调光（CM5 / BCM2712）
+//
+// CM5 的 GPIO 在 RP1 南桥：GPIO18 = a3 = PWM0_CHAN2（pinctrl funcs 18 实测），
+// PWM 控制器 rp1/pwm@98000（raspberrypi,rp1-pwm，#pwm-cells=3，基础 dtb 里
+// 默认 disabled 且无 pinctrl——2026-08-12 从 /sys/firmware/fdt 实测，所以
+// fragment@1 的 status=okay 和 pinctrl 都是必须的，且不会覆盖任何基础配置）。
+// CM0/CM3/CM4 用 pwm-backlight-3inch2-bcm.dts。
+//
+// 硬件链路（0720 网表）：Pi GPIO18 (CN1.49) → R158(0Ω) → PI_LCD_BL
+//   → U70 MUX(NC, MUX_SEL=0=Pi 侧) → LCD_BL → U55 SY7201ABC EN/PWM。
+//   R102 100k 上拉 3V3：GPIO18 悬空时背光常亮（failsafe）。
+// 周期 50000ns = 20kHz。
+//
+// 编译：dtc -@ -I dts -O dtb -o pwm-backlight-3inch2-rp1.dtbo pwm-backlight-3inch2-rp1.dts
+// 配套：gt911 overlay 已移除 gpio-backlight（同一 GPIO 不能两个驱动抢）。
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2712";
+
+	fragment@0 {
+		target = <&rp1_gpio>;
+		__overlay__ {
+			pwm_bl_pins: pwm_bl_pins {
+				function = "pwm0";	/* RP1 泛型 pinctrl 绑定（字符串，非 brcm,pins） */
+				pins = "gpio18";	/* GPIO18 a3 = PWM0_CHAN2 */
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&rp1_pwm0>;
+		__overlay__ {
+			status = "okay";
+			pinctrl-names = "default";
+			pinctrl-0 = <&pwm_bl_pins>;
+		};
+	};
+
+	fragment@2 {
+		target-path = "/";
+		__overlay__ {
+			/* label 不叫 backlight_pwm：避免与 vc4-kms-dpi overlay 导出的
+			   同名 __symbols__ 冲突；节点名保持 backlight_pwm（决定 /sys 路径） */
+			bl_pwm: backlight_pwm {
+				compatible = "pwm-backlight";
+				pwms = <&rp1_pwm0 2 50000 0>;	/* 通道 2，20kHz，极性 normal（#pwm-cells=3） */
+				brightness-levels = <0 6 8 12 16 24 32 40 48 64 96 128 160 192 224 255>;
+				default-brightness-level = <15>;	/* 开机全亮，与旧 gpio-backlight 行为一致 */
+			};
+		};
+	};
+
+	/* 挂到 DPI panel 上：DRM 使能面板时自动开背光（否则 pwm-backlight
+	   开机检测到 PWM 硬件为关 → bl_power=4 电源关，屏幕黑，2026-08-12 实测踩坑）。
+	   ⚠️ 因此本 overlay 必须在 vc4-kms-dpi-3inch2 之后加载（/panel 要先存在），
+	   config.txt 里要放在 [all] 显示 overlay 之后的条件段里。 */
+	fragment@3 {
+		target-path = "/panel";
+		__overlay__ {
+			backlight = <&bl_pwm>;
+		};
+	};
+};

@@ -1,0 +1,16 @@
+# Overlay compilation (01-overlays builds the .dtbo files in the chroot)
+device-tree-compiler
+
+# MCU flashing tools for /opt/typixdeck/firmware (04-firmware-tools)
+dfu-util
+esptool
+
+# Hardware debugging / utility packages
+evtest
+i2c-tools
+python3-smbus
+fbset
+
+# Backlight control from the CLI and OSD for brightness keys
+brightnessctl
+swayosd
