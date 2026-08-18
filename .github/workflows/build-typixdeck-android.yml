@@ -1,0 +1,245 @@
+name: Build TypixDeck Android image
+
+# Repacks a KonstaKANG LineageOS image (https://konstakang.com) with the
+# TypixDeck display / touch / backlight overlays preinstalled and publishes
+# it through the same typixdeck-latest OS list the Pi OS variants use, so
+# Raspberry Pi Imager offers Android next to them under the TypixDeck device.
+#
+# Manual-only: KonstaKANG's builds are third-party releases, so a run is
+# triggered by pasting the direct download URL of a lineage-*.zip (rpi5
+# builds cover Pi 5 / CM5, rpi4 builds cover Pi 4 / CM4). The zip contains a
+# plain raw image whose p1 is the firmware boot partition; see
+# scripts/repack-typixdeck-android for what gets injected.
+#
+# Licensing: KonstaKANG's builds are CC BY-NC-SA 4.0 - attribution required,
+# non-commercial use only. The repack keeps that license.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_url:
+        description: Direct download URL of the KonstaKANG lineage-*.zip
+        type: string
+        required: true
+      image_sha256:
+        description: sha256 of the zip from the KonstaKANG device page (blank = skip check)
+        type: string
+        default: ''
+      boot_device:
+        description: Storage the image will boot Android from
+        type: choice
+        options: [sdcard, usb, nvme]
+        default: sdcard
+      update_os_list:
+        description: Merge the result into the published OS list
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BOOT_DEVICE: ${{ inputs.boot_device }}
+    outputs:
+      tag: ${{ steps.repack.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y device-tree-compiler xz-utils unzip
+
+      # The uncompressed image is ~15 GB plus the download and the recompressed
+      # copy; same recipe as build-image.yml: drop unused preinstalled
+      # software and prefer the ephemeral disk when it is the larger one.
+      - name: Prepare the work area
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost || true
+          dir="$PWD/work"
+          if [ -d /mnt ] && [ "$(df --output=avail /mnt | tail -1)" -gt 25000000 ]; then
+            sudo install -d -o "$(id -u)" -g "$(id -g)" /mnt/android-work
+            dir=/mnt/android-work
+          else
+            mkdir -p "$dir"
+          fi
+          echo "WORK_DIR=$dir" >> "$GITHUB_ENV"
+          df -h
+
+      - name: Download the KonstaKANG image
+        run: |
+          curl -fL --retry 3 -o "$WORK_DIR/lineage.zip" "${{ inputs.image_url }}"
+          if [ -n "${{ inputs.image_sha256 }}" ]; then
+            echo "${{ inputs.image_sha256 }}  $WORK_DIR/lineage.zip" | sha256sum -c -
+          fi
+          unzip -o "$WORK_DIR/lineage.zip" -d "$WORK_DIR"
+          rm "$WORK_DIR/lineage.zip"
+          ls -l "$WORK_DIR"
+
+      - name: Inject the TypixDeck overlays and repack
+        id: repack
+        run: |
+          IMG="$(ls "$WORK_DIR"/lineage-*.img)"
+          base="$(basename "$IMG" .img)"   # lineage-23.2-20260520-UNOFFICIAL-KonstaKANG-rpi5
+          losver="$(echo "$base" | sed -E 's/^lineage-([0-9.]+)-.*/\1/')"
+          builddate="$(echo "$base" | sed -E 's/^lineage-[0-9.]+-([0-9]{8})-.*/\1/')"
+          dev="${base##*-}"                # rpi5 / rpi4
+          case "$dev" in
+            rpi5|rpi4) ;;
+            *) echo "cannot parse the device from $base" >&2; exit 1 ;;
+          esac
+
+          sudo ./scripts/repack-typixdeck-android \
+            --image "$IMG" \
+            --dts-dir typixdeck-stage/01-overlays/files \
+            --boot-device "$BOOT_DEVICE"
+
+          OUT="$WORK_DIR/${base}-typixdeck-${BOOT_DEVICE}.img"
+          mv "$IMG" "$OUT"
+          xz -T0 -k "$OUT"
+
+          {
+            echo "img=$OUT"
+            echo "archive=$OUT.xz"
+            echo "losver=$losver"
+            echo "dev=$dev"
+            echo "release_date=$(echo "$builddate" | sed -E 's/(....)(..)(..)/\1-\2-\3/')"
+            echo "tag=typixdeck-android-${dev}-${builddate}-${BOOT_DEVICE}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish the build release
+        run: |
+          # GitHub release assets top out at 2 GiB; KonstaKANG images compress
+          # to ~1.5 GB so this normally fits, but fail loudly if one doesn't.
+          size="$(stat -c%s "${{ steps.repack.outputs.archive }}")"
+          if [ "$size" -ge 2147483648 ]; then
+            echo "::error::archive is $size bytes, over the 2 GiB release asset limit"
+            exit 1
+          fi
+          TAG="${{ steps.repack.outputs.tag }}"
+          {
+            echo "KonstaKANG's unofficial LineageOS ${{ steps.repack.outputs.losver }}"
+            echo "build for the Raspberry Pi (${{ steps.repack.outputs.dev }}),"
+            echo "repacked with the TypixDeck display / touch / backlight overlays"
+            echo "preinstalled and the boot device set to ${BOOT_DEVICE}."
+            echo
+            echo "Source: ${{ inputs.image_url }}"
+            echo "Upstream: https://konstakang.com/devices/${{ steps.repack.outputs.dev }}/"
+            echo
+            echo 'First boot notes:'
+            echo '- The image does not expand itself. Enable Settings -> System ->'
+            echo '  Buttons -> Power menu -> Advanced restart, reboot to Recovery'
+            echo '  (TWRP) and flash KonstaKANG-rpi-resize.zip from the device page'
+            echo '  to grow /data to the full card / SSD.'
+            echo '- Raspberry Pi Imager OS customisation (user, Wi-Fi) does not'
+            echo '  apply to Android images.'
+            echo
+            echo 'License: CC BY-NC-SA 4.0 (non-commercial), same as upstream.'
+          } > notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" --prerelease \
+              --title "TypixDeck Android (LineageOS ${{ steps.repack.outputs.losver }}, ${{ steps.repack.outputs.dev }}, ${BOOT_DEVICE} boot)" \
+              --notes-file notes.md
+          fi
+          gh release upload "$TAG" "${{ steps.repack.outputs.archive }}" --clobber
+
+      - name: Write the OS list entry
+        run: |
+          TAG="${{ steps.repack.outputs.tag }}"
+          URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/$(basename "${{ steps.repack.outputs.archive }}")"
+          mkdir -p metadata
+          ./scripts/make-os-list-json \
+            --archive "${{ steps.repack.outputs.archive }}" \
+            --image "${{ steps.repack.outputs.img }}" \
+            --url "$URL" \
+            --name "Android (LineageOS ${{ steps.repack.outputs.losver }}) for TypixDeck (${{ steps.repack.outputs.dev }}, ${BOOT_DEVICE} boot)" \
+            --description "KonstaKANG's unofficial LineageOS build with the TypixDeck display, touch and backlight preinstalled. Does not self-expand: flash KonstaKANG-rpi-resize.zip in TWRP after first boot. CC BY-NC-SA 4.0, non-commercial." \
+            --icon "https://raw.githubusercontent.com/TypixNode/pi-gen/typixdeck/imager/typixdeck-icon.png" \
+            --website "https://konstakang.com/devices/${{ steps.repack.outputs.dev }}/" \
+            --release-date "${{ steps.repack.outputs.release_date }}" \
+            --init-format none \
+            --devices typixdeck \
+            --capabilities '' \
+            --output metadata/os_list.json
+          cat metadata/os_list.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-metadata
+          path: metadata/os_list.json
+
+  os-list:
+    needs: build
+    if: ${{ inputs.update_os_list }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    # Serialised with the other workflows that update the same pointer.
+    concurrency:
+      group: os-list-typixdeck-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      POINTER_TAG: typixdeck-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-metadata
+          path: artifacts
+
+      - name: Merge the entry into the OS list
+        run: |
+          mkdir -p work
+          if gh release download "$POINTER_TAG" --pattern os_list.json --dir work; then
+            echo "merging into the existing list"
+          else
+            echo "no existing list at $POINTER_TAG, starting one"
+          fi
+          ./scripts/make-os-list-json \
+            --merge-from artifacts/os_list.json \
+            --merge-into work/os_list.json \
+            --output work/os_list.json
+          cat work/os_list.json
+
+      - name: Publish the OS list
+        run: |
+          POINTER_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$POINTER_TAG"
+          {
+            echo 'OS list for Raspberry Pi Imager: TypixDeck images, newest builds.'
+            echo
+            echo '```'
+            echo "rpi-imager --repo $POINTER_URL/os_list.json"
+            echo '```'
+            echo
+            echo 'Or in Imager: App Options -> Content Repository -> custom URL.'
+            echo 'See `docs/imager_custom_repo.md` for a walkthrough.'
+            echo
+          } > notes.md
+          jq -r '
+            def row: "| \(.name) | \((.extract_size // 0) / 10000000 | round / 100) GB |";
+            "| Image | Uncompressed |",
+            "| --- | --- |",
+            (.os_list[] | if has("subitems") then .subitems[] | row else row end)
+          ' work/os_list.json >> notes.md
+
+          if gh release view "$POINTER_TAG" >/dev/null 2>&1; then
+            gh release edit "$POINTER_TAG" --notes-file notes.md
+          else
+            gh release create "$POINTER_TAG" --prerelease --target "$GITHUB_SHA" \
+              --title "TypixDeck OS images (OS list for Raspberry Pi Imager)" \
+              --notes-file notes.md
+          fi
+          gh release upload "$POINTER_TAG" work/os_list.json --clobber
+
+          {
+            echo '### OS list updated'
+            echo
+            cat notes.md
+          } >> "$GITHUB_STEP_SUMMARY"

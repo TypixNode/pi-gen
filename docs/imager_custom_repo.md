@@ -36,6 +36,7 @@ rpi-imager --repo https://github.com/TypixNode/pi-gen/releases/download/typixdec
    - **Raspberry Pi OS Desktop (Trixie arm64) for TypixDeck** —— 正式版（由 `typixdeck-v*` tag 构建），面向 CM4/CM5；
    - **Raspberry Pi OS Slim Desktop (Trixie arm64) for TypixDeck** —— 裁剪版桌面，适配 Compute Module 3 的 4GB eMMC（约 3GB 镜像），同样带全套 TypixDeck 硬件支持；
    - **Raspberry Pi OS + KDE Plasma Mobile (Trixie arm64) for TypixDeck (Beta)** —— Plasma Mobile 变体，触摸优先界面，**始终标记为 Beta**（KMS 驱动下已知有渲染问题，见构建方案文档）；
+   - **Android (LineageOS x.y) for TypixDeck (rpi5, sdcard boot)** —— 基于 KonstaKANG 非官方 LineageOS 构建的 Android 镜像，预装了 TypixDeck 屏幕/触摸/背光 overlay（详见下文"四、Android 镜像"）；
    - **… (Beta builds)** 文件夹 —— 每个变体各有一个折叠子目录，按时间倒序存放历史 Beta 构建。Beta 条目名称形如
      `Raspberry Pi OS Desktop (Trixie arm64) for TypixDeck 20260818-080953 (Beta)`（UTC 构建时间戳），描述中带有构建来源信息（`Pre-release build. commit <sha7>, workflow run #<编号>.`），方便反馈问题时精确定位到构建；
 3. 选择存储卡 / eMMC，正常走 Imager 流程即可。高级选项（主机名、用户名密码、SSH、Wi-Fi、时区等）通过 cloud-init（`init_format: cloudinit-rpi`）生效，与官方 Trixie 镜像机制相同。
@@ -49,6 +50,38 @@ CI 只保留每个变体**最近 5 个** Beta 构建的 Release，`os_list.json`
 ```bash
 rpi-imager --repo https://github.com/TypixNode/pi-gen/releases/download/<构建tag>/os_list.json
 ```
+
+## 四、Android 镜像（LineageOS / KonstaKANG 重打包）
+
+Android 变体不是 pi-gen 构建的，而是由 `.github/workflows/build-typixdeck-android.yml`（手动触发）把 [KonstaKANG](https://konstakang.com) 的 LineageOS 树莓派镜像重打包而成：
+
+- 在 boot 分区 `/overlays/` 注入 TypixDeck 的 4 个 `.dtbo`（DPI 屏、GT911 触摸、CM5/RP1 与 BCM 两种 PWM 背光）；
+- `dtoverlay` 行写入 **`config_user.txt`** 而不是 `config.txt`——KonstaKANG 的 TWRP OTA 升级包会保留 `config_user.txt`，所以 OTA 后硬件支持不丢；
+- 按构建参数把 `config.txt` 里的启动设备切到 `android-sdcard` / `android-usb` / `android-nvme` 之一。
+
+### 怎么刷
+
+和 Pi OS 镜像完全一样：镜像就是普通的 raw `.img.xz`，在 Imager 里选 TypixDeck → 选 Android 条目 → 选存储设备 → 写入。区别只有：
+
+- **Imager 的高级选项（用户名/Wi-Fi/SSH）对 Android 无效**（`init_format: none`），首次开机在 Android 设置向导里配置；
+- **TF 卡**：直接刷，用 `sdcard boot` 版本；
+- **PCIe NVMe SSD**：把 SSD 装进 USB 转接盒 / M.2 底座在电脑上刷 `nvme boot` 版本（CM5 也可以用 `rpiboot` 把板载存储挂成 U 盘再刷）。装回设备后从 NVMe 启动。刷了 `sdcard boot` 版本也没关系——挂载 boot 分区手动改 `config.txt` 里 `Boot device` 段的三行注释即可。
+
+### 扩容（重要）
+
+Android 镜像**不会像 Pi OS 一样首次开机自动扩容**：分区表里是固定大小的 boot/system/vendor/userdata 四个分区，写完后卡上剩余空间处于未分配状态。官方扩容方法：
+
+1. 首次开机完成设置向导；
+2. 打开 设置 → 系统 → 按键 →「电源菜单」→ 勾选 **Advanced restart（高级重启）**；
+3. 从 KonstaKANG 设备页下载 **`KonstaKANG-rpi-resize.zip`**，放到设备内部存储或 U 盘；
+4. 电源菜单选 **Recovery** 重启进 TWRP，Install 该 zip；
+5. 重启回系统，`/data` 即扩展到整卡 / 整盘。
+
+装 GApps（Google 服务）、Magisk 也是同样的 TWRP 流程，见 KonstaKANG 设备页 FAQ。
+
+### 许可注意
+
+KonstaKANG 的构建采用 **CC BY-NC-SA 4.0（署名-非商业性使用-相同方式共享）**。重打包镜像保持同一许可：可以分享（保留署名），**不可用于商业用途**；如果 TypixDeck 将来要随商业产品预装 Android，需要另行联系作者授权或自行从源码构建。
 
 ## 附：os_list.json 的 `imager.devices` 字段说明
 

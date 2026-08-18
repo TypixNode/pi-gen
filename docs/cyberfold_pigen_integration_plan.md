@@ -98,6 +98,21 @@ Raspberry Pi OS（bookworm/trixie, labwc）的屏幕键盘是 **`squeekboard` + 
 
 建议：本期只做「官方 Desktop」+「Plasma Mobile」两个变体，把变体机制（每变体一个 config + stage 组合）做通用，后续加新桌面只是加 config。
 
+### 2.6 Android 变体（KonstaKANG LineageOS 重打包）✅ 已实现
+
+调研结论（2026-08 核实自 KonstaKANG 设备页 FAQ）：
+
+- **镜像格式**：KonstaKANG 的 LineageOS 构建是普通 raw `.img`（zip 打包），p1 为 FAT32 boot 分区（config.txt 所在），官方安装方式就是 Raspberry Pi Imager / Etcher 直刷——因此可以直接进我们的 os_list.json；
+- **启动介质**：TF 卡 / USB / PCIe NVMe 三选一，由 `config.txt` 的 `Boot device` 段（`dtoverlay=android-sdcard|android-usb|android-nvme`）决定，刷前或刷后改都行；
+- **扩容**：**不自动**。分区为 boot/system/vendor/userdata 固定四分区，官方方案是开机后启用 Advanced restart → 进 TWRP → 刷 `KonstaKANG-rpi-resize.zip` 扩 `/data`；无法像 Pi OS 那样 cloud-init 首启扩容（Android 无此机制）；
+- **OTA 持久化**：TWRP OTA 包会重写 `config.txt` 但**保留 `config_user.txt`**，所以 TypixDeck 的 dtoverlay 行必须写 `config_user.txt`；
+- **硬件要求**：至少 2GB RAM → 只覆盖 CM4（rpi4 构建）/ CM5（rpi5 构建），CM3 无缘；
+- **许可**：CC BY-NC-SA 4.0，**非商业**。重打包再分发合规（署名+同许可），商业预装需另行授权。
+
+实现：`scripts/repack-typixdeck-android`（loop 挂载 p1，dtc 编译 4 个 overlay 进 `/overlays/`，TypixDeck 块写 `config_user.txt`，切启动设备，BCM 音频/PWM 冲突处理与 02-config-txt 一致）+ `.github/workflows/build-typixdeck-android.yml`（手动触发，输入 KonstaKANG zip 直链 → 重打包 → xz → Release → 合并进 `typixdeck-latest` os_list）。用户文档见 `docs/imager_custom_repo.md` 第四节。
+
+待实测风险：KonstaKANG 内核是否含 goodix（GT911）触摸与 pwm-backlight 驱动；DPI 面板与其 `resolution.txt` HDMI 逻辑的共存；3.2" 1024x768 下的 Android 显示密度（可在 设置 → Raspberry Pi settings 或 build.prop 调）。
+
 ---
 
 ## 3. 实施方案

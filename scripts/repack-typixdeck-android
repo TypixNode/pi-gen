@@ -1,0 +1,111 @@
+#!/bin/bash -e
+
+# Inject TypixDeck hardware support into a KonstaKANG LineageOS image.
+#
+# KonstaKANG's Raspberry Pi builds (https://konstakang.com) are plain raw
+# images: p1 is a FAT32 boot partition with the firmware's config.txt, the
+# rest is Android (system/vendor/userdata). That makes them flashable with
+# Raspberry Pi Imager like any Pi OS image, and it means the TypixDeck
+# display / touch / backlight overlays can be preinstalled the same way the
+# typixdeck-stage does for Pi OS: compile the .dts overlays into
+# /overlays/*.dtbo on the boot partition and reference them from the config.
+#
+# The dtoverlay lines go into config_user.txt rather than config.txt because
+# KonstaKANG's TWRP OTA packages preserve config_user.txt but rewrite
+# config.txt; config.txt sources config_user.txt last, so the ordering
+# requirement (DPI panel before touch before backlight) holds within our
+# block. Only two edits touch config.txt itself and both are re-applied
+# easily after an OTA: the "Boot device" selector (android-sdcard /
+# android-usb / android-nvme, KonstaKANG's own mechanism for TF card vs USB
+# vs PCIe NVMe boot) and commenting out dtparam=audio=on, whose BCM283x PWM
+# block the backlight needs on CM4 and older (re-enabled for pi5/cm5 in our
+# block, same as typixdeck-stage/02-config-txt).
+#
+# Must run as root (loop-mounts the image). The image is modified in place.
+#
+# Usage:
+#   repack-typixdeck-android --image lineage-xxx.img \
+#       --dts-dir typixdeck-stage/01-overlays/files \
+#       [--boot-device sdcard|usb|nvme]
+
+IMAGE=""
+DTS_DIR=""
+BOOT_DEVICE="sdcard"
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--image) IMAGE="$2"; shift 2 ;;
+		--dts-dir) DTS_DIR="$2"; shift 2 ;;
+		--boot-device) BOOT_DEVICE="$2"; shift 2 ;;
+		*) echo "unknown argument: $1" >&2; exit 1 ;;
+	esac
+done
+
+[ -n "$IMAGE" ] && [ -f "$IMAGE" ] || { echo "--image is required" >&2; exit 1; }
+[ -n "$DTS_DIR" ] && [ -d "$DTS_DIR" ] || { echo "--dts-dir is required" >&2; exit 1; }
+case "$BOOT_DEVICE" in sdcard|usb|nvme) ;; *)
+	echo "--boot-device must be sdcard, usb or nvme" >&2; exit 1 ;;
+esac
+[ "$(id -u)" = 0 ] || { echo "must run as root" >&2; exit 1; }
+command -v dtc >/dev/null || { echo "dtc not found (install device-tree-compiler)" >&2; exit 1; }
+
+OVERLAYS="vc4-kms-dpi-3inch2-1024x768 gt911-touch-3inch2-1024x768 pwm-backlight-3inch2-bcm pwm-backlight-3inch2-rp1"
+MARKER="# --- TypixDeck hardware (repack-typixdeck-android) ---"
+
+LOOP="$(losetup -fP --show "$IMAGE")"
+MNT="$(mktemp -d)"
+cleanup() {
+	mountpoint -q "$MNT" && umount "$MNT"
+	rmdir "$MNT"
+	losetup -d "$LOOP"
+}
+trap cleanup EXIT
+
+[ -b "${LOOP}p1" ] || { echo "no partitions found in $IMAGE" >&2; exit 1; }
+mount "${LOOP}p1" "$MNT"
+[ -f "$MNT/config.txt" ] || { echo "p1 has no config.txt; not a KonstaKANG boot partition?" >&2; exit 1; }
+
+echo "==> compiling overlays into p1:/overlays/"
+install -d "$MNT/overlays"
+for ov in $OVERLAYS; do
+	dtc -@ -I dts -O dtb -o "$MNT/overlays/${ov}.dtbo" "$DTS_DIR/${ov}.dts"
+done
+
+echo "==> selecting boot device: $BOOT_DEVICE"
+if ! grep -qE "^#*dtoverlay=android-${BOOT_DEVICE}([[:space:]]|\$)" "$MNT/config.txt"; then
+	echo "config.txt has no android-${BOOT_DEVICE} overlay line" >&2
+	exit 1
+fi
+sed -i -E 's@^dtoverlay=(android-(sdcard|usb|nvme))@#dtoverlay=\1@' "$MNT/config.txt"
+sed -i -E "s@^#+(dtoverlay=android-${BOOT_DEVICE})([[:space:]].*)?\$@\1@" "$MNT/config.txt"
+
+if ! grep -qxF "$MARKER" "$MNT/config_user.txt" 2>/dev/null; then
+	echo "==> appending TypixDeck block to config_user.txt"
+	sed -i 's|^dtparam=audio=on$|#dtparam=audio=on  # TypixDeck: BCM PWM is used by the backlight; re-enabled for pi5/cm5 in config_user.txt|' "$MNT/config.txt"
+	cat >> "$MNT/config_user.txt" << EOF
+
+${MARKER}
+[all]
+dtoverlay=vc4-kms-dpi-3inch2-1024x768
+dtoverlay=gt911-touch-3inch2-1024x768
+
+# PWM backlight overlays MUST come after the DPI overlay (they attach to /panel)
+[cm5]
+dtoverlay=pwm-backlight-3inch2-rp1
+[cm4]
+dtoverlay=pwm-backlight-3inch2-bcm
+[pi3]
+dtoverlay=pwm-backlight-3inch2-bcm
+
+# On-board audio is safe where it does not sit on the BCM283x PWM block
+[pi5]
+dtparam=audio=on
+[cm5]
+dtparam=audio=on
+[all]
+# --- end TypixDeck hardware ---
+EOF
+fi
+
+echo "==> resulting boot device lines:"
+grep -E "^#?dtoverlay=android-" "$MNT/config.txt"
