@@ -118,3 +118,13 @@ Demo video for the first user (`~/Videos/`): Coldplay live at River Plate,
 1080p H.264 so both the CM4 and CM5 hardware-decode it. The file is stored
 in git via **git-lfs**; the step fails loudly when it finds an un-fetched
 LFS pointer instead of the real file.
+
+### `08-wallpaper`
+
+Default wallpaper (Mt. Fuji / Chureito Pagoda, 2048x1536 4:3 to match the
+panel, right-aligned crop so the pagoda survives). Installed into
+`/usr/share/rpd-wallpaper/` so it appears in the Appearance Settings
+chooser, and set as the system default for the desktop
+(`/etc/xdg/pcmanfm/default/desktop-items-*.conf`) and the lightdm greeter
+(`/etc/lightdm/pi-greeter.conf`). Per-user configs inherit these defaults
+on first login; the first-boot wizard background stays stock.
