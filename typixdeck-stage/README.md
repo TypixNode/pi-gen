@@ -11,26 +11,33 @@ The stage exports the final image (`EXPORT_IMAGE` with an empty
 touches build-local `SKIP_IMAGES` files in stage2/stage4 so the intermediate
 Lite/Desktop images are not exported as well.
 
+The stage is intentionally minimal: the image is the upstream Raspberry Pi
+OS arm64 desktop plus the TypixDeck display / touch / backlight overlays,
+their `config.txt` block, (when the debs are present) the dwc2-fixed kernel,
+and a small, carefully bounded package purge (see `05-remove-packages` for
+the hard-won rules on what must never be purged).
+
 ## Sub-stages
 
 ### `00-install-kernel`
 
 Optionally installs the TypixDeck kernel: rpi-6.18.y plus the dwc2 ISO-OUT
 split fix (`drivers/usb/dwc2/hcd_queue.c`), which is what makes USB audio
-behind the FE2.1 hub work on the CM5 carrier. The `.deb` files come from
-`make bindeb-pkg` in the patched kernel tree and are too big for git; drop
-them into `00-install-kernel/files/debs/` before building. Without them the
-step logs a warning and keeps the stock kernel (fine for everything except
-that USB audio path); set `TYPIXDECK_REQUIRE_KERNEL=1` to make a missing
-deb fatal for factory builds.
+behind the FE2.1 hub work on the CM5 carrier (verified on-device: the stock
+6.18.39+rpt kernel enumerates the UAC device but plays silence; this kernel
+plays fine, and the desktop session is unaffected). The `.deb` files come
+from `make bindeb-pkg` in the patched kernel tree and are too big for git;
+drop them into `00-install-kernel/files/debs/` before building. Without them
+the step logs a warning and keeps the stock kernel; set
+`TYPIXDECK_REQUIRE_KERNEL=1` to make a missing deb fatal for factory builds.
 
 ### `00-install-packages`
 
-Utility and tooling packages: `device-tree-compiler` (needed by
-`01-overlays`), `dfu-util` + `esptool` (needed by the flashing scripts of
-`04-firmware-tools`), `evtest`, `i2c-tools`, `python3-smbus`, `fbset`,
-`brightnessctl`, and `swayosd` (OSD for brightness/volume keys; available in
-trixie as `swayosd 0.1.0-5`).
+* `device-tree-compiler` - needed by `01-overlays`
+* `esptool`, `dfu-util` - MCU flashing tools used by `04-firmware-tools`
+* `build-essential`, `linux-headers-rpi-v8`, `linux-headers-rpi-2712` -
+  on-device kernel module / native development against the stock kernels
+* `vim`
 
 ### `01-overlays`
 
@@ -58,6 +65,11 @@ The append is guarded by a marker line, so re-running the stage never
 duplicates it. Enables the DPI panel, the GT911 touch and - **after** the DPI
 overlay, because they attach to `/panel` - the per-model PWM backlight
 overlays, plus `enable_uart=0` (the UART pins belong to the DPI bus).
+The Wi-Fi antenna is left at the CM4/CM5 default (ant1, the PCB antenna on
+the module); switching to the external U.FL connector (`dtparam=ant2`) is
+done at runtime with the TypixDeck Toolbox (`06-toolbox`) - the
+uConsole ships ant2 hardcoded and its forum is full of people whose Wi-Fi
+got worse because of antenna placement, so this must stay a user choice.
 
 Audio: on BCM283x models the on-board analog audio (`dtparam=audio=on`)
 claims the same PWM block the backlight needs, so the stock global
@@ -65,24 +77,12 @@ claims the same PWM block the backlight needs, so the stock global
 re-enabled only in the `[pi5]`/`[cm5]` sections, where audio does not sit on
 the legacy PWM controller.
 
-### `03-brightness-tray`
-
-Installs `brightness-tray.py` (from CyberFold `scripts/brightness_tray/`) as
-`/usr/local/bin/brightness-tray`: a StatusNotifier/AppIndicator applet for
-the wf-panel tray that steps the 16-level sysfs backlight (scroll wheel =
-one step, menu = presets). Adds its dependency
-`gir1.2-ayatanaappindicator3-0.1` and starts it from the system-wide
-`/etc/xdg/labwc/autostart` (appended if the file already exists) with the
-`sleep 3 && ... &` pattern so the panel tray is up first.
-
-**Skipped gracefully when `/usr/bin/labwc` is not in the rootfs** (e.g. the
-Plasma Mobile variant): no tray, no autostart entry, and no GTK/Ayatana
-dependency get installed there.
-
 ### `04-firmware-tools`
 
 Ships the MCU firmware and flashing scripts into the image under
-`/opt/typixdeck/firmware/`:
+`/opt/typixdeck/firmware/`, with the tools (`esptool`, `dfu-util`)
+preinstalled by `00-install-packages` so the device can reflash its own
+MCUs out of the box:
 
 * `esp32s3/` - `flash_esp32.sh` + firmware `.bin` files for the ESP32-S3
   co-processor (esptool over `/dev/ttyACM*`, magic-string reboot into the
@@ -92,13 +92,29 @@ Ships the MCU firmware and flashing scripts into the image under
 
 ### `05-remove-packages`
 
-Purges what a TypixDeck does not need, then `apt-get autoremove --purge`:
+Purges `rpi-connect` / `rpi-connect-lite` and `squeekboard` (the on-screen
+keyboard; the TypixDeck has a physical keyboard). Only ever purges packages
+that are actually installed, **never** purges `wfplug-squeek` (its removal
+takes `rpd-wayland-core` with it, which ships the wayland session entry and
+the labwc/greeter configs - instant black screen) and **never** runs
+`apt-get autoremove` (after the metapackage is gone it sweeps
+labwc/xwayland/wf-panel-pi). Both failure modes were confirmed on-device.
 
-* `rpi-connect` / `rpi-connect-lite` - stage2 installs `rpi-connect-lite`;
-  purging here (instead of editing stage2) keeps the shared stages identical
-  to upstream for the stock images.
-* `squeekboard` / `wfplug-squeek` - on-screen keyboard pulled in by the
-  stage4 desktop; the TypixDeck has a physical KeebDeck keyboard.
+### `06-toolbox`
 
-Only packages that are actually installed are purged, so the stage also
-works on variants that never installed some of them.
+Installs the **TypixDeck Toolbox** (`/usr/local/bin/typixdeck-toolbox`), a
+small GTK3/Python settings app for hardware options that live in
+`config.txt`, plus its `.desktop` entry and a desktop shortcut for the first
+user. Currently it manages the Wi-Fi/BT antenna selection (external U.FL /
+internal PCB / module default). Apply never writes silently: it shows a
+colored unified diff of the pending `config.txt` change first, edits
+semantically (uncomments an existing line in place instead of appending
+duplicates, comments out instead of deleting) and writes via `pkexec`. The
+UI follows the system locale (English / Simplified Chinese).
+
+### `07-media`
+
+Demo video for the first user (`~/Videos/`): Coldplay live at River Plate,
+1080p H.264 so both the CM4 and CM5 hardware-decode it. The file is stored
+in git via **git-lfs**; the step fails loudly when it finds an un-fetched
+LFS pointer instead of the real file.
