@@ -11,20 +11,21 @@
 install -m 755 files/typixdeck-toolbox "${ROOTFS_DIR}/usr/local/bin/typixdeck-toolbox"
 install -m 644 files/typixdeck-toolbox.desktop "${ROOTFS_DIR}/usr/share/applications/typixdeck-toolbox.desktop"
 
-# Desktop shortcut for the first user. NO exec bit: pcmanfm/libfm launches
-# .desktop entries directly, and an executable bit instead triggers the
-# "seems to be an executable script" Execute/Open prompt.
+# Desktop shortcut for the first user. A Type=Link entry pointing at the
+# installed launcher - the same pattern the stock desktop uses for its
+# Chromium icon. libfm treats Type=Application files in the home dir as
+# untrusted executables and pops an Execute/Open prompt (with or without
+# the exec bit, verified on-device); Type=Link entries launch directly.
 install -d "${ROOTFS_DIR}/home/${FIRST_USER_NAME}/Desktop"
-install -m 644 files/typixdeck-toolbox.desktop \
-	"${ROOTFS_DIR}/home/${FIRST_USER_NAME}/Desktop/typixdeck-toolbox.desktop"
-
-# libfm asks "Execute or Open?" for every launcher/executable double-clicked
-# on the desktop (even without the exec bit, verified on-device). quick_exec
-# skips that prompt so the shortcut opens the app directly.
-LIBFM_CONF="${ROOTFS_DIR}/etc/xdg/libfm/libfm.conf"
-if [ -f "${LIBFM_CONF}" ] && ! grep -q '^quick_exec=' "${LIBFM_CONF}"; then
-	sed -i '/^\[config\]/a quick_exec=1' "${LIBFM_CONF}"
-fi
+cat > "${ROOTFS_DIR}/home/${FIRST_USER_NAME}/Desktop/typixdeck-toolbox.desktop" << 'EOF'
+[Desktop Entry]
+Type=Link
+Name=TypixDeck Toolbox
+Name[zh_CN]=TypixDeck 工具箱
+Icon=preferences-system
+URL=/usr/share/applications/typixdeck-toolbox.desktop
+EOF
+chmod 644 "${ROOTFS_DIR}/home/${FIRST_USER_NAME}/Desktop/typixdeck-toolbox.desktop"
 on_chroot << EOF
 chown -R ${FIRST_USER_NAME}:${FIRST_USER_NAME} "/home/${FIRST_USER_NAME}/Desktop"
 EOF
