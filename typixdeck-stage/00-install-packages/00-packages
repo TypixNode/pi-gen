@@ -1,16 +1,17 @@
 # Overlay compilation (01-overlays builds the .dtbo files in the chroot)
 device-tree-compiler
 
-# MCU flashing tools for /opt/typixdeck/firmware (04-firmware-tools)
-dfu-util
+# MCU flashing tools for /opt/typixdeck/firmware (04-firmware-tools):
+# esptool for the ESP32-S3 co-processor, dfu-util for the KeebDeck STM32
 esptool
+dfu-util
 
-# Hardware debugging / utility packages
-evtest
-i2c-tools
-python3-smbus
-fbset
+# On-device kernel module / native development. Headers for the dwc2fix
+# kernel come from its own deb (00-install-kernel); these cover the stock
+# fallback kernels (v8 = CM4/Pi4, 2712 = CM5/Pi5).
+build-essential
+linux-headers-rpi-v8
+linux-headers-rpi-2712
 
-# Backlight control from the CLI and OSD for brightness keys
-brightnessctl
-swayosd
+# Basic editor
+vim
