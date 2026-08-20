@@ -17,6 +17,14 @@ install -m 644 files/typixdeck-toolbox.desktop "${ROOTFS_DIR}/usr/share/applicat
 install -d "${ROOTFS_DIR}/home/${FIRST_USER_NAME}/Desktop"
 install -m 644 files/typixdeck-toolbox.desktop \
 	"${ROOTFS_DIR}/home/${FIRST_USER_NAME}/Desktop/typixdeck-toolbox.desktop"
+
+# libfm asks "Execute or Open?" for every launcher/executable double-clicked
+# on the desktop (even without the exec bit, verified on-device). quick_exec
+# skips that prompt so the shortcut opens the app directly.
+LIBFM_CONF="${ROOTFS_DIR}/etc/xdg/libfm/libfm.conf"
+if [ -f "${LIBFM_CONF}" ] && ! grep -q '^quick_exec=' "${LIBFM_CONF}"; then
+	sed -i '/^\[config\]/a quick_exec=1' "${LIBFM_CONF}"
+fi
 on_chroot << EOF
 chown -R ${FIRST_USER_NAME}:${FIRST_USER_NAME} "/home/${FIRST_USER_NAME}/Desktop"
 EOF
