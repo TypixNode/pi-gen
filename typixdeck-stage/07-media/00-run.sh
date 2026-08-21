@@ -16,6 +16,8 @@ checksum_ok() {
 }
 
 if [ ! -f "files/${VIDEO}" ] || ! checksum_ok; then
+	# files/ only holds the gitignored video, so a fresh checkout lacks it
+	mkdir -p files
 	curl -fL --retry 3 -o "files/${VIDEO}" "${VIDEO_URL}"
 	if ! checksum_ok; then
 		echo "07-media: checksum mismatch for ${VIDEO}" >&2
