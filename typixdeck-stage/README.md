@@ -25,7 +25,11 @@ Optionally installs the TypixDeck kernel: rpi-6.18.y plus the dwc2 ISO-OUT
 split fix (`drivers/usb/dwc2/hcd_queue.c`), which is what makes USB audio
 behind the FE2.1 hub work on the CM5 carrier (verified on-device: the stock
 6.18.39+rpt kernel enumerates the UAC device but plays silence; this kernel
-plays fine, and the desktop session is unaffected). The `.deb` files come
+plays fine, and the desktop session is unaffected). The `kernel=` line is
+scoped to `[cm5]`: only the CM5 routes USB through the dwc2 controller, the
+CM4 runs `otg_mode=1` on the 2711 built-in XHCI (no ISO-OUT split issue)
+and boots the stock kernel - the 2711 firmware hangs on the rainbow splash
+with this image anyway (verified on-device). The `.deb` files come
 from `make bindeb-pkg` in the patched kernel tree and are too big for git;
 drop them into `00-install-kernel/files/debs/` before building. Without them
 the step logs a warning and keeps the stock kernel; set

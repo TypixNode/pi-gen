@@ -72,15 +72,20 @@ KLIB="${ROOTFS_DIR}/usr/lib/linux-image-${KVER}"
 cp "${KLIB}"/broadcom/bcm2712*.dtb "${ROOTFS_DIR}/boot/firmware/"
 cp "${KLIB}"/overlays/* "${ROOTFS_DIR}/boot/firmware/overlays/"
 
-# Boot this kernel by name. The stock kernel packages only ever touch
-# kernel_2712.img/kernel8.img, so an apt upgrade cannot clobber this file, and
-# the stock kernel stays installed as a fallback (comment these lines out to
-# boot it).
+# Boot this kernel by name, on the CM5 ONLY. The dwc2 fix matters only
+# there: the CM5 carrier routes USB through the dwc2 controller
+# (dtoverlay=dwc2,dr_mode=host), while the CM4 runs otg_mode=1 on the 2711
+# built-in XHCI, which has no ISO-OUT split problem - and the CM4 firmware
+# does not boot this image anyway (stuck on the rainbow splash, verified
+# on-device). Everything else keeps the stock kernel8.img/kernel_2712.img,
+# which apt upgrades keep maintaining as the fallback.
 cat >> "${ROOTFS_DIR}/boot/firmware/config.txt" << EOF
 
-# TypixDeck: boot the dwc2-fixed kernel (USB audio behind the hub).
-# The stock kernel_2712.img is kept as a fallback; comment out these two
-# lines to boot it instead.
+# TypixDeck: the CM5 boots the dwc2-fixed kernel (USB audio behind the
+# FE2.1 hub); the CM4 needs no fix (otg_mode=1 XHCI) and stays on the
+# stock kernel. Comment out to fall back to kernel_2712.img on the CM5.
+[cm5]
 kernel=kernel-dwc2fix.img
 initramfs initramfs-dwc2fix followkernel
+[all]
 EOF
