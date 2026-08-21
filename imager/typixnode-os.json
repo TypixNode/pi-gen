@@ -26,21 +26,19 @@
   "os_list": [
     {
       "name": "TypixDeckOS (64-bit)",
-      "description": "Raspberry Pi OS Trixie with the labwc desktop for the TypixDeck / TypixNode handheld (CM5): dwc2-fixed 6.18 kernel, 3.2\" 1024x768 DPI panel and GT911 touch preconfigured.",
+      "description": "Raspberry Pi OS Trixie with the labwc desktop for the TypixDeck / TypixNode handheld (CM4/CM5): 3.2\" 1024x768 DPI panel, GT911 touch and PWM backlight preconfigured, TypixDeck Toolbox included.",
       "icon": "https://raw.githubusercontent.com/TypixNode/pi-gen/typixdeck/imager/typixnode.png",
-      "url": "https://github.com/TypixNode/pi-gen/releases/download/image_2026-08-14-TypixDeckOS/image_2026-08-14-TypixDeckOS.img.xz",
-      "extract_size": 3456106496,
-      "extract_sha256": "479527d7d217a92c45d5721cfb27a31473f43718b9ddcaa3e8dffa1723d807c1",
-      "image_download_size": 774008604,
-      "image_download_sha256": "9ed6f0339713e49639792837ea4f08e415260c8f1a5fb32eafc7bffca8c91941",
-      "release_date": "2026-08-14",
+      "url": "https://github.com/TypixNode/pi-gen/releases/download/typixdeck-build-20260821-7e6dc79/raspios-trixie-arm64-typixdeck.img.xz",
+      "extract_size": 6853492736,
+      "extract_sha256": "b40d1d648847975b857293992fa67724c812843fbb03f2d6380d74f2c51660f4",
+      "image_download_size": 1600999124,
+      "image_download_sha256": "d7a1f496463539dd055462a35628e0ae6ab8c715f199db17e5268c17341b2af7",
+      "release_date": "2026-08-21",
       "init_format": "cloudinit-rpi",
       "devices": [
         "pi5-64bit"
       ],
-      "capabilities": [
-        "rpi_connect"
-      ],
+      "capabilities": [],
       "website": "https://github.com/TypixNode/pi-gen"
     }
   ]
