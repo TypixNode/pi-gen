@@ -11,3 +11,5 @@ __pycache__/
 # Kernel debs are 30MB+; see typixdeck-stage/README.md for how to build them.
 typixdeck-stage/00-install-kernel/files/debs/
 config-typixdeck-dev
+# Downloaded / locally cached build-time asset (see typixdeck-stage/07-media)
+typixdeck-stage/07-media/files/*.mp4
