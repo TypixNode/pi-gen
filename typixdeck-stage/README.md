@@ -115,9 +115,10 @@ UI follows the system locale (English / Simplified Chinese).
 ### `07-media`
 
 Demo video for the first user (`~/Videos/`): Coldplay live at River Plate,
-1080p H.264 so both the CM4 and CM5 hardware-decode it. The file is stored
-in git via **git-lfs**; the step fails loudly when it finds an un-fetched
-LFS pointer instead of the real file.
+1080p H.264 so both the CM4 and CM5 hardware-decode it. The 112MB file
+lives outside git on the `media-assets-v1` release (GitHub rejects LFS
+uploads to public forks): local builds use the gitignored copy in
+`files/`, CI downloads it, and both verify the pinned sha256.
 
 ### `08-wallpaper`
 
