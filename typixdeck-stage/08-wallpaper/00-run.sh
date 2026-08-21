@@ -13,6 +13,14 @@
 
 WALLPAPER=typixdeck-fuji.jpg
 
+# Only meaningful on the Raspberry Pi Desktop (pcmanfm + lightdm). The
+# Plasma Mobile variant shares this stage but has neither the wallpaper
+# directory nor the configs below - KDE manages its own look.
+if [ ! -d "${ROOTFS_DIR}/usr/share/rpd-wallpaper" ]; then
+	echo "08-wallpaper: no rpd desktop in this rootfs, skipping"
+	exit 0
+fi
+
 install -m 644 "files/${WALLPAPER}" \
 	"${ROOTFS_DIR}/usr/share/rpd-wallpaper/${WALLPAPER}"
 
