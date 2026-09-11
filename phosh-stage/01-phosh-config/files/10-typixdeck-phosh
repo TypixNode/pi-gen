@@ -1,0 +1,30 @@
+# System-wide dconf defaults for the TypixDeck Phosh image (users can still
+# override them; dconf update compiles this into /etc/dconf/db/local).
+
+# The device autologs in and has no lock screen (labwc on the stock image has
+# none either). The lock screen keypad also does not fit the 4:3 panel above
+# scale 1.3, so keep it out of the way entirely.
+[org/gnome/desktop/screensaver]
+lock-enabled=false
+
+[org/gnome/desktop/lockdown]
+disable-lock-screen=true
+
+[sm/puri/phosh/lockscreen]
+require-unlock=false
+
+# No screensaver / blanking: phosh cannot switch the DPI panel's power state
+# ("Failed to set output power mode for DPI-1"), so "blank" only paints a
+# black frame with the backlight still on - it looks powered off and saves
+# nothing. Idle dimming and suspend attempts are disabled for the same reason.
+[org/gnome/desktop/session]
+idle-delay=uint32 0
+
+[org/gnome/settings-daemon/plugins/power]
+idle-dim=false
+sleep-inactive-ac-type='nothing'
+sleep-inactive-battery-type='nothing'
+
+# Battery percentage in the top bar (STC3117 gauge via the kernel driver).
+[org/gnome/desktop/interface]
+show-battery-percentage=true

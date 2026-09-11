@@ -1,0 +1,14 @@
+# TypixDeck Phosh (GNOME mobile shell) variant (Beta).
+# Build with:  sudo ./build.sh -c config-typixdeck-phosh
+# See phosh-stage/README.md for details and known issues.
+
+IMG_NAME="raspios-trixie-arm64-typixdeck-phosh"
+RELEASE=trixie
+ARCH=arm64
+STAGE_LIST="stage0 stage1 stage2 phosh-stage typixdeck-stage"
+DEPLOY_COMPRESSION=xz
+
+# stage2 ships an EXPORT_IMAGE (the Lite image). Only the final image, exported
+# by typixdeck-stage, is wanted - same SKIP_IMAGES mechanism as the other
+# variants (the marker is gitignored and persists in the working tree).
+touch "${BASE_DIR}/stage2/SKIP_IMAGES"
