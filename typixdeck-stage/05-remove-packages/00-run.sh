@@ -20,7 +20,13 @@
 
 on_chroot << 'EOF'
 PURGE=""
-for pkg in rpi-connect rpi-connect-lite squeekboard; do
+# squeekboard is Phosh's on-screen keyboard (phosh-core depends on it):
+# keep it on the Phosh variant, drop it everywhere else.
+DROP="rpi-connect rpi-connect-lite"
+if ! dpkg -s phosh > /dev/null 2>&1; then
+	DROP="$DROP squeekboard"
+fi
+for pkg in $DROP; do
 	if dpkg -s "$pkg" > /dev/null 2>&1; then
 		PURGE="$PURGE $pkg"
 	fi

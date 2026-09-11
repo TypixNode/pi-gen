@@ -12,6 +12,9 @@ dfu-util
 build-essential
 linux-headers-rpi-v8
 linux-headers-rpi-2712
+# STC3117 battery gauge driver is built out-of-tree via DKMS (03-battery-dkms)
+# and rebuilt automatically when a new kernel + headers are installed
+dkms
 
 # Basic editor
 vim

@@ -62,6 +62,14 @@ dtoverlay=i2c-fan,emc2301,i2c_csi_dsi0
 # normally enables it by itself, this just makes it explicit. Both fans can
 # coexist - typixdeck-pi-info reports whichever hwmon has a tacho reading.
 dtparam=cooling_fan=on
+# STC3117 battery gauge (U53, 0x70) on the same SDA0/SCL0 pair, behind the
+# Pi/ESP32 I2C mux (readable while the Pi owns the display). CM4: the default
+# target &i2c_csi_dsi is GPIO44/45 (i2c-10); &i2c_csi_dsi0 would be GPIO0/1,
+# which the DPI panel owns. CM5: pass i2c_csi_dsi0 for the RP1 bus on GPIO38/39.
+[cm4]
+dtoverlay=stc3117-gauge
+[cm5]
+dtoverlay=stc3117-gauge,i2c_csi_dsi0
 [all]
 # --- end TypixDeck hardware ---
 EOF

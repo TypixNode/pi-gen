@@ -9,12 +9,14 @@
 #   * gt911-touch-3inch2-1024x768 - GT911 touch over bit-banged I2C
 #   * pwm-backlight-3inch2-bcm    - PWM backlight, BCM283x SoCs (&pwm, GPIO18 ALT5)
 #   * pwm-backlight-3inch2-rp1    - PWM backlight, CM5/BCM2712 (&rp1_pwm0 chan 2)
+#   * stc3117-gauge               - STC3117 battery gauge on SDA0/SCL0 (linux/stc3117-fuel-gauge/
+#                                   in the TypixDeck repo; driver built by 03-battery-dkms)
 #
 # dtc emits "unit_address_vs_reg" style warnings for the decompiled-style
 # sources (vc4/gt911); they are harmless and the output is bit-identical to
 # the production .dtbo files.
 
-OVERLAYS="vc4-kms-dpi-3inch2-1024x768 gt911-touch-3inch2-1024x768 pwm-backlight-3inch2-bcm pwm-backlight-3inch2-rp1"
+OVERLAYS="vc4-kms-dpi-3inch2-1024x768 gt911-touch-3inch2-1024x768 pwm-backlight-3inch2-bcm pwm-backlight-3inch2-rp1 stc3117-gauge"
 
 install -d "${ROOTFS_DIR}/var/tmp/typixdeck-overlays"
 for ov in ${OVERLAYS}; do

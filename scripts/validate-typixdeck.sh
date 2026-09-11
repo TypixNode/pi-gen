@@ -65,6 +65,8 @@ check "kanshi profile has DPI-1 scale"      sh -c 'grep -q "output DPI-1 .*scale
 check "greeter kanshi profile present"      test -s /etc/xdg/labwc-greeter/config.kanshi
 check "typixdeck-toolbox installed"         test -x /usr/local/bin/typixdeck-toolbox
 check "keebdeck F13 hwdb quirk installed"   test -f /etc/udev/hwdb.d/90-typixdeck-keebdeck.hwdb
+check "stc3117 gauge module (dkms)"        sh -c 'modinfo stc3117_fuel_gauge > /dev/null 2>&1'
+check "stc3117 battery power_supply node"  test -d /sys/class/power_supply/stc3117-battery
 
 echo
 echo "== pi-info telemetry line =="

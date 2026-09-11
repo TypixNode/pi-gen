@@ -81,6 +81,25 @@ claims the same PWM block the backlight needs, so the stock global
 re-enabled only in the `[pi5]`/`[cm5]` sections, where audio does not sit on
 the legacy PWM controller.
 
+### `03-battery-dkms`
+
+Pi-side battery gauge. The **STC3117** (U53, I2C 0x70) sits on the module's
+SDA0/SCL0 behind the Pi/ESP32 I2C mux and is readable while the Pi owns the
+display. Raspberry Pi OS leaves `CONFIG_FUEL_GAUGE_STC3117` unset, so the
+mainline v6.18 driver is shipped as a **DKMS module** (`/usr/src/
+stc3117-fuel-gauge-6.18`, built here for every kernel with headers and
+rebuilt automatically by the dkms kernel postinst hook on kernel upgrades).
+The source carries the TypixDeck fixes listed in the TypixDeck repo,
+`linux/stc3117-fuel-gauge/README.md` (mainline writes the 16x16-bit OCV
+table as 16 bytes and corrupts it, exports tenths of a percent as CAPACITY,
+misreads current sign/width, and resets a gauge another MCU already
+configured). The overlay `stc3117-gauge` (from `01-overlays`, enabled in
+`02-config-txt`: `[cm4] dtoverlay=stc3117-gauge`, `[cm5]
+dtoverlay=stc3117-gauge,i2c_csi_dsi0`) declares the 10 mOhm shunt and a
+2400 mAh simple-battery. Result: `/sys/class/power_supply/stc3117-battery`,
+picked up by UPower, so every desktop's battery indicator works. Needed by
+all variants (labwc, Plasma Mobile, Phosh).
+
 ### `03-keyboard-hwdb`
 
 udev hwdb quirk for the **KeebDeck 6R11C** keyboard (USB `c182:6b11`): the

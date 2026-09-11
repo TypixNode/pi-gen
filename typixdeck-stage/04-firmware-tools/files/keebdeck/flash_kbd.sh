@@ -5,7 +5,7 @@
 # 进 DFU：空片插 USB 自动进（F042 empty-check）；已刷 QMK 的按 Fn+菱形 或 Sym+菱形
 set -u
 cd "$(dirname "$0")"
-BIN=keebdeck_6r11c_default_20260818.bin
+BIN=keebdeck_6r11c_default_20260911_sq-kcno.bin
 [ "${1:-}" = "diag" ] && BIN=keebdeck_6r11c_diag_20260818.bin
 [ -f "$BIN" ] || { echo "找不到 $BIN"; exit 1; }
 
