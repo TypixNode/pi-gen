@@ -160,3 +160,17 @@ chooser, and set as the system default for the desktop
 (`/etc/xdg/pcmanfm/default/desktop-items-*.conf`) and the lightdm greeter
 (`/etc/lightdm/pi-greeter.conf`). Per-user configs inherit these defaults
 on first login; the first-boot wizard background stays stock.
+
+## Dev scripts (`scripts/`)
+
+* `dev-flash-tf.sh [image]` - from the Mac: stream the newest `deploy/*-dev.img`
+  onto the TF card of a TypixDeck that is running from its SSD (refuses to
+  overwrite the running root), then copy the SSD system's Wi-Fi profiles in.
+* `dev-boot.sh tf|ssd` - flip the EEPROM `BOOT_ORDER` and reboot into the
+  candidate (TF) or the resident system (SSD).
+* `validate-typixdeck.sh` - on-device acceptance checks: compositor, audio,
+  backlight, touch, DPI panel, ESP32-S3 enumeration, telemetry service, fan
+  driver, kanshi scale, toolbox, bundled firmware. `PASS`/`FAIL` gate the exit
+  code, `WARN` is for optional wiring (fan tacho). Run remotely with
+  `ssh pi@<addr> 'bash -s' < scripts/validate-typixdeck.sh`.
+
