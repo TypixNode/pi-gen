@@ -20,3 +20,11 @@ Package: libwlroots-0.18
 Pin: release o=Debian
 Pin-Priority: 1001
 PIN
+
+# Refresh the package lists before 01-packages: the pin above changes the
+# candidate for libwlroots-0.18, and a cached stage2 rootfs may carry stale
+# lists (a 404 on a superseded debian-security webkit2gtk build failed the
+# first local run). pi-gen's -packages handler does not update by itself.
+on_chroot << CHROOT
+apt-get update
+CHROOT
