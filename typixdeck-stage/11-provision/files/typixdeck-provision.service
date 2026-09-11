@@ -1,0 +1,19 @@
+[Unit]
+Description=TypixDeck first-boot provisioning (flash blank ESP32-S3 / keyboard)
+Documentation=file:///var/lib/typixdeck/provision.log
+# USB must be enumerated; run before any login screen or getty takes tty1.
+After=systemd-udev-settle.service local-fs.target
+Wants=systemd-udev-settle.service
+Before=display-manager.service getty@tty1.service
+# touch this file to opt out (e.g. on a dev unit you flash by hand)
+ConditionPathExists=!/etc/typixdeck/provision.disabled
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/typixdeck-provision
+TimeoutStartSec=15min
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

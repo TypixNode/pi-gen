@@ -1,0 +1,153 @@
+#!/bin/bash
+# TypixDeck first-boot provisioning: flash a blank (or bricked) ESP32-S3
+# and/or a blank KeebDeck keyboard from the firmware bundled in
+# /opt/typixdeck/firmware, then power off so the user does a clean power-on.
+#
+# Runs as a root oneshot before the display manager (see the .service).
+# Exits immediately when nothing needs flashing, so normal boots are not
+# affected. Progress goes to the kernel console (tty1 = the DPI panel, which
+# becomes visible the moment the freshly flashed ESP hands the screen over)
+# and to the ACT LED (fast blink while flashing) for the blind phase before
+# that. Everything is also logged to /var/lib/typixdeck/provision.log.
+#
+# Detection is purely by USB identity, so it needs no state on the Pi:
+#   ESP32-S3  303a:80c3 = app running (nothing to do)
+#             303a:1001 = USB-Serial-JTAG ROM: blank chip, BOOT+RESET, or a
+#                         crash-looping firmware -> flash the full image
+#             303a:0009 = USB-OTG ROM download mode (magic string) -> same
+#   keyboard  0483:df11 = STM32 DFU: blank STM32F042 enters it by itself
+#             c182:6b11 = KeebDeck QMK app running (nothing to do)
+#
+# Verified 2026-09-11 on a TypixDeck 0720 with the flash erased: the blank
+# chip enumerates as 303a:1001, esptool 5.x + stub flashes the 3.9 MB image
+# in ~26 s and `--after watchdog-reset` reliably restarts it into the app
+# (the DTR/RTS hard reset does NOT work from the strapped/blank 1001 state).
+
+set -u
+FW=/opt/typixdeck/firmware
+ESPTOOL=${ESPTOOL:-/opt/typixdeck/esptool-venv/bin/esptool}
+LOGDIR=/var/lib/typixdeck
+LOG=$LOGDIR/provision.log
+TTY=/dev/tty1
+LED=/sys/class/leds/ACT
+SETTLE_S=${SETTLE_S:-10}       # how long a 1001/0009 must persist without 80c3
+POWEROFF_S=${POWEROFF_S:-15}
+NO_POWEROFF=${NO_POWEROFF:-0}     # =1: test run, report but do not power off
+
+mkdir -p "$LOGDIR"
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
+say() {                        # console + log
+    log "$*"
+    printf '%s\n' "$*" > "$TTY" 2>/dev/null || true
+}
+console_open() {
+    command -v plymouth >/dev/null && plymouth quit 2>/dev/null || true
+    chvt 1 2>/dev/null || true
+    printf '\033[2J\033[H' > "$TTY" 2>/dev/null || true
+    setfont /usr/share/consolefonts/Lat15-TerminusBold32x16.psf.gz 2>/dev/null || \
+    setfont /usr/share/consolefonts/Lat15-TerminusBold28x14.psf.gz 2>/dev/null || true
+}
+led_trigger_saved=""
+led_fast() {
+    [ -d "$LED" ] || return
+    led_trigger_saved=$(sed -n 's/.*\[\(.*\)\].*/\1/p' "$LED/trigger")
+    echo timer > "$LED/trigger" 2>/dev/null || return
+    echo 100 > "$LED/delay_on"; echo 100 > "$LED/delay_off"
+}
+led_restore() {
+    [ -d "$LED" ] && [ -n "$led_trigger_saved" ] && echo "$led_trigger_saved" > "$LED/trigger" 2>/dev/null || true
+}
+has() { lsusb 2>/dev/null | grep -q "$1"; }
+wait_for() {                   # wait_for <usb-id> <seconds>
+    local i; for i in $(seq 1 "$2"); do has "$1" && return 0; sleep 1; done; return 1
+}
+esp_port() { ls /dev/ttyACM* 2>/dev/null | head -1; }
+
+# ---- 1. settle: give a working ESP time to reach the app ----------------
+esp_state=ok
+if ! wait_for 303a:80c3 "$SETTLE_S"; then
+    if has 303a:1001 || has 303a:0009; then esp_state=flash; else esp_state=absent; fi
+fi
+kbd_state=ok
+has 0483:df11 && kbd_state=flash
+
+if [ "$esp_state" != flash ] && [ "$kbd_state" != flash ]; then
+    log "nothing to provision (esp=$esp_state kbd=$kbd_state)"
+    exit 0
+fi
+
+console_open
+say "=== TypixDeck provisioning ==="
+say "ESP32-S3: $esp_state   keyboard: $kbd_state"
+did=0; failed=0
+
+# ---- 2. ESP32-S3 ---------------------------------------------------------
+if [ "$esp_state" = flash ]; then
+    IMG=$(ls "$FW"/esp32s3/typixdeck_esp32s3_full_*.bin 2>/dev/null | sort | tail -1)
+    PORT=$(esp_port)
+    if [ -z "$IMG" ] || [ -z "$PORT" ]; then
+        say "!! ESP32-S3: no image or no /dev/ttyACM* (img=$IMG port=$PORT)"; failed=1
+    else
+        say "ESP32-S3: flashing $(basename "$IMG") via $PORT ..."
+        say "          (screen stays dark until this finishes, ACT LED blinks fast)"
+        led_fast
+        ok=0
+        if [ -x "$ESPTOOL" ] && "$ESPTOOL" --chip esp32s3 -p "$PORT" -b 921600 \
+                --after watchdog-reset write-flash 0x0 "$IMG" >> "$LOG" 2>&1; then
+            ok=1
+        else
+            say "ESP32-S3: stub flash failed, retrying with the system esptool (no-stub) ..."
+            if esptool --no-stub --chip esp32s3 -p "$PORT" -b 460800 write_flash 0x0 "$IMG" >> "$LOG" 2>&1; then
+                ok=1
+                # no-stub cannot watchdog-reset; try to kick it out with the venv tool
+                [ -x "$ESPTOOL" ] && "$ESPTOOL" --chip esp32s3 -p "$PORT" --after watchdog-reset read-mac >> "$LOG" 2>&1 || true
+            fi
+        fi
+        led_restore
+        if [ "$ok" = 1 ] && wait_for 303a:80c3 25; then
+            say "ESP32-S3: OK - firmware running (303a:80c3)"; did=1
+        elif [ "$ok" = 1 ]; then
+            say "ESP32-S3: written, but it did not restart by itself - will run after power-off"; did=1
+        else
+            say "!! ESP32-S3: flash FAILED - see $LOG"; failed=1
+        fi
+    fi
+fi
+
+# ---- 3. keyboard ---------------------------------------------------------
+if [ "$kbd_state" = flash ]; then
+    BIN=$(ls "$FW"/keebdeck/keebdeck_6r11c_default_*.bin 2>/dev/null | sort | tail -1)
+    if [ -z "$BIN" ]; then
+        say "!! keyboard: no keebdeck_6r11c_default_*.bin"; failed=1
+    else
+        say "keyboard: flashing $(basename "$BIN") over DFU ..."
+        led_fast
+        if dfu-util -a 0 -d 0483:df11 -s 0x08000000:leave -D "$BIN" >> "$LOG" 2>&1; then
+            led_restore
+            if wait_for c182:6b11 10; then
+                say "keyboard: OK - KeebDeck running (c182:6b11)"
+            else
+                say "keyboard: written (verified by dfu-util) - will run after power-off"
+            fi
+            did=1
+        else
+            led_restore
+            say "!! keyboard: dfu-util FAILED - see $LOG"; failed=1
+        fi
+    fi
+fi
+
+# ---- 4. finish -----------------------------------------------------------
+say ""
+if [ "$failed" = 1 ]; then
+    say "=== provisioning FINISHED WITH ERRORS - check $LOG ==="
+    say "Powering off in $((POWEROFF_S * 2)) s. Switch on again to retry."
+    sleep $((POWEROFF_S * 2))
+else
+    say "=== provisioning complete ==="
+    say "Powering off in $POWEROFF_S s. Please switch the device OFF and ON again."
+    sleep "$POWEROFF_S"
+fi
+log "poweroff (did=$did failed=$failed)"
+[ "$NO_POWEROFF" = 1 ] && { say "(NO_POWEROFF=1: not powering off)"; exit "$failed"; }
+systemctl poweroff

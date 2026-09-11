@@ -15,3 +15,8 @@ linux-headers-rpi-2712
 
 # Basic editor
 vim
+
+# venv for esptool >= 5 (11-provision); console fonts + chvt/setfont for its tty1 progress
+python3-venv
+kbd
+console-setup

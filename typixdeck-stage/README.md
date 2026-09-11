@@ -143,6 +143,21 @@ plus `config.init` as raindrop's pristine copy) and the greeter copy in
 1.0/1.5/2.0/3.0; the TypixDeck Toolbox (`06-toolbox`) adds 1.25 and applies
 it live with `pkill -HUP kanshi`.
 
+### `11-provision`
+
+First-boot provisioning for the factory: `typixdeck-provision.service` (root
+oneshot, before the display manager) flashes a **blank or bricked ESP32-S3**
+(enumerates as `303a:1001` / `303a:0009` instead of the app's `303a:80c3`)
+with the bundled full image, and a **blank KeebDeck** (STM32F042 in DFU,
+`0483:df11`) with the bundled QMK firmware, then powers off so the user does
+a clean power-on. Nothing to flash = exits in milliseconds. Progress goes to
+the DPI console (tty1) once the ESP hands the screen over, the ACT LED
+blinks fast during the blind phase, everything is logged to
+`/var/lib/typixdeck/provision.log`. Opt out with
+`touch /etc/typixdeck/provision.disabled`. Uses esptool >= 5 from
+`/opt/typixdeck/esptool-venv` (stub flasher + `--after watchdog-reset`, the
+only reset that works from the blank-chip 1001 state).
+
 ### `07-media`
 
 Demo video for the first user (`~/Videos/`): Coldplay live at River Plate,

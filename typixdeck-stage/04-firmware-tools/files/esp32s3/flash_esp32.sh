@@ -18,9 +18,15 @@ flash_one() {
         port=$(ls /dev/ttyACM* 2>/dev/null | head -1)
         [ -z "$port" ] && { echo "!! 魔法串后设备消失"; return 1; }
     fi
-    # 先试 stub（快），失败回退 --no-stub（apt 版 esptool 缺 stub JSON 时）
-    esptool --chip esp32s3 -p "$port" -b 921600 write_flash 0x0 "$BIN" ||
-    esptool --no-stub --chip esp32s3 -p "$port" -b 460800 write_flash 0x0 "$BIN"
+    # 优先 /opt 里的 esptool ≥5（stub + 压缩传输 ~25s，且 --after watchdog-reset
+    # 用 RTC 看门狗复位，1001/0009 两条路刷完都能自己回到 app，2026-09-11 实测
+    # 4/4）；没有就回退 apt 版 4.7（无 stub，~45s，刷完可能要手按 RESET）
+    local E=/opt/typixdeck/esptool-venv/bin/esptool
+    if [ -x "$E" ]; then
+        "$E" --chip esp32s3 -p "$port" -b 921600 --after watchdog-reset write-flash 0x0 "$BIN"
+    else
+        esptool --no-stub --chip esp32s3 -p "$port" -b 460800 write_flash 0x0 "$BIN"
+    fi
 }
 
 echo "== TypixDeck ESP32-S3 批量刷机（$BIN）=="
