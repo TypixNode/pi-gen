@@ -64,6 +64,7 @@ warn  "fan tacho > 0 rpm (FG wire on CN5.4)" sh -c 'd=$(grep -lx emc2305 /sys/cl
 check "kanshi profile has DPI-1 scale"      sh -c 'grep -q "output DPI-1 .*scale" "$HOME/.config/kanshi/config"'
 check "greeter kanshi profile present"      test -s /etc/xdg/labwc-greeter/config.kanshi
 check "typixdeck-toolbox installed"         test -x /usr/local/bin/typixdeck-toolbox
+check "keebdeck F13 hwdb quirk installed"   test -f /etc/udev/hwdb.d/90-typixdeck-keebdeck.hwdb
 
 echo
 echo "== pi-info telemetry line =="

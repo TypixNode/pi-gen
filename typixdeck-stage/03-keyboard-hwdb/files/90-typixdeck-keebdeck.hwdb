@@ -1,0 +1,10 @@
+# TypixDeck KeebDeck 6R11C keyboard (USB c182:6b11).
+# The square key (matrix 0,1) is the Pi<->ESP32 display MUX toggle. The ESP32
+# learns about it over the keyboard I2C channel by matrix position; the F13
+# the QMK keymap also sends to the host is a side effect, and xkb maps F13 to
+# XF86Tools, which GNOME/Phosh and Plasma bind to "open Settings".
+# Drop it here so every desktop ignores it (HID usage 0x07/0x68 -> scancode 0x70068).
+# Newer keyboard firmware sends KC_NO for the key; this rule covers keyboards
+# still running the F13 firmware.
+evdev:input:b0003vC182p6B11*
+ KEYBOARD_KEY_70068=reserved

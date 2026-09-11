@@ -81,6 +81,18 @@ claims the same PWM block the backlight needs, so the stock global
 re-enabled only in the `[pi5]`/`[cm5]` sections, where audio does not sit on
 the legacy PWM controller.
 
+### `03-keyboard-hwdb`
+
+udev hwdb quirk for the **KeebDeck 6R11C** keyboard (USB `c182:6b11`): the
+square key (display MUX toggle) also sends **F13** to the host, xkb maps F13
+to `XF86Tools`, and GNOME/Phosh (`control-center-static`) as well as Plasma
+open Settings on it - labwc ignores it, so stock Pi OS never showed this.
+`90-typixdeck-keebdeck.hwdb` maps scancode `0x70068` to `reserved` for that
+VID/PID so every desktop ignores the key; the ESP32 still gets the toggle
+(it matches matrix position over the keyboard I2C channel, not keycodes).
+Newer keyboard firmware sends `KC_NO` for the key; the rule covers boards
+still running the F13 firmware.
+
 ### `04-firmware-tools`
 
 Ships the MCU firmware and flashing scripts into the image under
