@@ -48,6 +48,20 @@ dtoverlay=pwm-backlight-3inch2-bcm
 dtparam=audio=on
 [cm5]
 dtparam=audio=on
+
+# EMC2301 fan controller on the module's SDA0/SCL0 (CM4: GPIO44/45 via i2c0mux,
+# CM5: RP1 I2C6). The i2c-fan overlay enables that bus itself - do NOT add
+# dtparam=i2c_vc alongside it (two DT owners of one bus). Without this overlay
+# the chip stays at its power-on 100 % duty and no hwmon exists, so the
+# dashboard shows fan "N/A". minpwm must stay <= 51 on >= 6.12 kernels.
+[cm4]
+dtoverlay=i2c-fan,emc2301,i2c_csi_dsi
+[cm5]
+dtoverlay=i2c-fan,emc2301,i2c_csi_dsi0
+# CM5 also has the Pi 5-style 4-pin PWM fan (RP1, hwmon "pwmfan"); firmware
+# normally enables it by itself, this just makes it explicit. Both fans can
+# coexist - typixdeck-pi-info reports whichever hwmon has a tacho reading.
+dtparam=cooling_fan=on
 [all]
 # --- end TypixDeck hardware ---
 EOF

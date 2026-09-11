@@ -1,0 +1,6 @@
+# TypixDeck ESP32-S3 co-processor, app firmware (UAC+CDC composite, 303a:80c3).
+# Stable symlink + start the telemetry pusher as soon as the CDC port appears.
+# The ROM/JTAG download modes (303a:0009 / 303a:1001) deliberately do NOT match,
+# so the service stops (BindsTo) while the chip is being flashed.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="80c3", \
+    SYMLINK+="typixdeck-esp", TAG+="systemd", ENV{SYSTEMD_WANTS}+="typixdeck-pi-info.service"

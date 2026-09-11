@@ -1,0 +1,25 @@
+[Unit]
+Description=TypixDeck: push Pi telemetry (model, CPU/NVMe temp, fan, throttle) to the ESP32-S3 dashboard
+Documentation=file:///opt/typixdeck/firmware/esp32s3/flash_esp32.sh
+# Started by udev when /dev/typixdeck-esp appears (99-typixdeck-esp.rules);
+# BindsTo stops it the moment the device goes away (unplug / reflash).
+BindsTo=dev-typixdeck\x2desp.device
+After=dev-typixdeck\x2desp.device
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/typixdeck-pi-info /dev/typixdeck-esp
+Restart=on-failure
+RestartSec=3
+# root is needed for /dev/vcio (vcgencmd) and the tty; lock everything else down
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+DeviceAllow=/dev/typixdeck-esp rw
+DeviceAllow=/dev/vcio rw
+DeviceAllow=/dev/vchiq rw
+DevicePolicy=closed

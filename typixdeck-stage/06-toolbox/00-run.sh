@@ -1,7 +1,6 @@
 #!/bin/bash -e
 
-# TypixDeck toolbox: GTK app for hardware options that live in
-# config.txt (currently the Wi-Fi antenna: internal PCB vs external U.FL).
+# TypixDeck toolbox: GTK app (tabbed: Wi-Fi antenna + display scale).
 # python3-gi and GTK are already part of the desktop stages.
 #
 # The image ships NO antenna configuration at all (hardware default ant1 =

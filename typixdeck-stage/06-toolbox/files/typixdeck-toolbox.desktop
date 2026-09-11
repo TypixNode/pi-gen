@@ -2,8 +2,8 @@
 Type=Application
 Name=TypixDeck Toolbox
 Name[zh_CN]=TypixDeck 工具箱
-Comment=Hardware options for the TypixDeck (Wi-Fi antenna, ...)
-Comment[zh_CN]=TypixDeck 硬件选项（无线天线等）
+Comment=Hardware options for the TypixDeck (Wi-Fi antenna, display scale)
+Comment[zh_CN]=TypixDeck 硬件选项（无线天线、显示缩放）
 Exec=typixdeck-toolbox
 Icon=preferences-system
 Terminal=false

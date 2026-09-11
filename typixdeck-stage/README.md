@@ -107,14 +107,41 @@ labwc/xwayland/wf-panel-pi). Both failure modes were confirmed on-device.
 ### `06-toolbox`
 
 Installs the **TypixDeck Toolbox** (`/usr/local/bin/typixdeck-toolbox`), a
-small GTK3/Python settings app for hardware options that live in
-`config.txt`, plus its `.desktop` entry and a desktop shortcut for the first
-user. Currently it manages the Wi-Fi/BT antenna selection (external U.FL /
-internal PCB / module default). Apply never writes silently: it shows a
-colored unified diff of the pending `config.txt` change first, edits
-semantically (uncomments an existing line in place instead of appending
-duplicates, comments out instead of deleting) and writes via `pkexec`. The
-UI follows the system locale (English / Simplified Chinese).
+small GTK3/Python settings app, plus its `.desktop` entry and a desktop
+shortcut for the first user. Two tabs keep the window short enough to use
+on the 1024×768 panel at x1.5: **Antenna** (Wi-Fi/BT: external U.FL /
+internal PCB / module default) and **Display** (kanshi scale 1.0 / 1.25 /
+1.5, same file and SIGHUP reload as Control Centre). Antenna Apply never
+writes silently: it shows a colored unified diff of the pending
+`config.txt` change first, edits semantically (uncomments an existing line
+in place instead of appending duplicates, comments out instead of deleting)
+and writes via `pkexec`. The UI follows the system locale (English /
+Simplified Chinese).
+
+### `09-pi-info`
+
+Pi → ESP32-S3 telemetry. A **system (root) unit**, `typixdeck-pi-info.service`,
+is started by udev the moment the ESP's CDC port enumerates as `303a:80c3`
+(`/dev/typixdeck-esp` symlink) and writes one line every 2 s:
+
+```
+EGGFLY_PI_INFO model=CM4 rev=1.0 cpu=72.1 nvme=41 fan=3200 thr=0x0 load=0.52 up=1234
+```
+
+The ESP dashboard shows model + CPU temperature on the status chip and the
+full set on the PI SIG page. `BindsTo=dev-typixdeck\x2desp.device` stops the
+unit while the chip is in download mode (`303a:0009` / `303a:1001`), so
+`flash_esp32.sh` and `esp_screenshot.py` never fight it for the port. No user
+session is involved: works on the lite image and before login.
+
+### `10-display-scale`
+
+Ships the desktop at **x1.25** on the 3.2" 1024x768 panel by writing the
+kanshi profile the Control Centre itself uses (`~/.config/kanshi/config`,
+plus `config.init` as raindrop's pristine copy) and the greeter copy in
+`/etc/xdg/labwc-greeter/config.kanshi`. Control Centre only offers
+1.0/1.5/2.0/3.0; the TypixDeck Toolbox (`06-toolbox`) adds 1.25 and applies
+it live with `pkill -HUP kanshi`.
 
 ### `07-media`
 

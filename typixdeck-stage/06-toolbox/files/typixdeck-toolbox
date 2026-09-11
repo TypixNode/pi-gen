@@ -16,6 +16,13 @@ in place (keeping its position and section scope) rather than a new line
 being appended; disabling comments lines out rather than deleting them.
 Writing is done through pkexec, so the app itself runs unprivileged.
 
+Also manages the desktop scale of the built-in 3.2" 1024x768 DPI panel
+(1.0 / 1.25 / 1.5). Control Centre only offers 1.0/1.5/2.0/3.0; labwc and
+kanshi accept any fractional value, so the toolbox edits the same file the
+Control Centre writes (~/.config/kanshi/config), reloads kanshi with SIGHUP
+(exactly what Control Centre does), and optionally copies the profile to the
+login screen (/etc/xdg/labwc-greeter/config.kanshi) via pkexec.
+
 UI language follows the system locale (zh* -> Chinese, otherwise English).
 """
 
@@ -28,12 +35,20 @@ import tempfile
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Pango  # noqa: E402
+from gi.repository import Gdk, Gtk, Pango  # noqa: E402
 
 CONFIG_PATH = "/boot/firmware/config.txt"
 MARK_BEGIN = "# --- TypixDeck toolbox ---"
 MARK_END = "# --- end TypixDeck toolbox ---"
 DISABLED_SUFFIX = "  # disabled by TypixDeck toolbox"
+
+KANSHI_PATH = os.path.expanduser("~/.config/kanshi/config")
+GREETER_KANSHI_PATH = "/etc/xdg/labwc-greeter/config.kanshi"
+PANEL_OUTPUT = "DPI-1"
+PANEL_MODE = "1024x768@57.782"
+PANEL_PX = (1024, 768)          # 内置 DPI 屏物理像素
+WIN_SIZE = (400, 340)           # 逻辑默认；按当前 scale 再封顶，1.5x 也能点到按钮
+SCALES = ("1.0", "1.25", "1.5")
 
 ANT_PARAMS = ("ant1", "ant2")
 MODE_DEFAULT, MODE_INTERNAL, MODE_EXTERNAL = "default", "ant1", "ant2"
@@ -46,10 +61,12 @@ BLOCK_COMMENT = {
 STRINGS = {
     "en": {
         "title": "TypixDeck Toolbox",
+        "tab_antenna": "Antenna",
+        "tab_scale": "Display",
         "antenna_frame": " Wi-Fi Antenna ",
-        "external": "External antenna (module U.FL connector, dtparam=ant2)",
-        "internal": "Internal antenna (module PCB antenna, dtparam=ant1)",
-        "default": "Module default (no config; e.g. the CM0 defaults to the external antenna)",
+        "external": "External (module U.FL, dtparam=ant2)",
+        "internal": "Internal (module PCB, dtparam=ant1)",
+        "default": "Module default (no dtparam=ant*)",
         "state_external": "external (ant2)",
         "state_internal": "internal (ant1)",
         "state_default": "module default (no ant* config)",
@@ -72,13 +89,30 @@ STRINGS = {
             "The antenna setting takes effect after a reboot. Reboot now?",
         "reboot_later": "Later",
         "reboot_now": "Reboot now",
+        "scale_frame": " Display scale (3.2\" 1024x768 panel) ",
+        "scale_hint":
+            "1.25 is not offered by Control Centre but labwc supports it. "
+            "Fractional scale renders GTK3 apps at 2x and downsamples, "
+            "so 1.25/1.5 look slightly softer than 1.0.",
+        "scale_greeter": "Also apply to the login screen (needs authorization)",
+        "scale_apply": "Apply scale",
+        "scale_status": "Active: <b>x{scale}</b>   config: {path}",
+        "scale_applied": "Scale x{scale} applied",
+        "scale_applied_detail":
+            "kanshi reloaded. The login screen copy {greeter}.",
+        "greeter_ok": "was updated",
+        "greeter_skip": "was not changed",
+        "greeter_fail": "could not be written (authorization cancelled)",
+        "scale_fail": "Could not write {path}: {err}",
     },
     "zh": {
         "title": "TypixDeck 工具箱",
+        "tab_antenna": "天线",
+        "tab_scale": "显示",
         "antenna_frame": " 无线天线 ",
-        "external": "外置天线（模块 U.FL 接口，dtparam=ant2）",
-        "internal": "内置天线（模块 PCB 天线，dtparam=ant1）",
-        "default": "默认（不写任何配置；如 CM0 默认即外置天线）",
+        "external": "外置天线（模块 U.FL，dtparam=ant2）",
+        "internal": "内置天线（模块 PCB，dtparam=ant1）",
+        "default": "模块默认（不写 dtparam=ant*）",
         "state_external": "外置（ant2）",
         "state_internal": "内置（ant1）",
         "state_default": "模块默认（无 ant* 配置）",
@@ -98,6 +132,19 @@ STRINGS = {
         "written_detail": "天线设置在重启后生效。现在重启吗？",
         "reboot_later": "稍后重启",
         "reboot_now": "立即重启",
+        "scale_frame": " 显示缩放（3.2 寸 1024x768 屏）",
+        "scale_hint":
+            "控制中心没有 1.25 档，但 labwc 支持任意分数缩放。"
+            "分数缩放下 GTK3 应用先按 2 倍渲染再缩小，1.25/1.5 会比 1.0 略软。",
+        "scale_greeter": "同时应用到登录界面（需要授权）",
+        "scale_apply": "应用缩放",
+        "scale_status": "当前生效: <b>x{scale}</b>   配置: {path}",
+        "scale_applied": "已应用 x{scale}",
+        "scale_applied_detail": "kanshi 已重载。登录界面配置{greeter}。",
+        "greeter_ok": "已同步",
+        "greeter_skip": "未改动",
+        "greeter_fail": "写入失败（授权被取消）",
+        "scale_fail": "无法写入 {path}: {err}",
     },
 }
 
@@ -222,6 +269,123 @@ def write_config(new_text):
         os.unlink(tmp_path)
 
 
+# ---------------------------------------------------------------------------
+# Display scale via kanshi (same file + same SIGHUP reload Control Centre uses)
+# ---------------------------------------------------------------------------
+def kanshi_read():
+    try:
+        with open(KANSHI_PATH, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _output_line_tokens(line):
+    """Tokens of an `output <name> ...` line inside a profile, else None."""
+    tokens = line.strip().split()
+    if len(tokens) >= 2 and tokens[0] == "output" and tokens[1] == PANEL_OUTPUT:
+        return tokens
+    return None
+
+
+def kanshi_current_scale(text):
+    for line in text.splitlines():
+        tokens = _output_line_tokens(line)
+        if tokens and "scale" in tokens:
+            try:
+                return float(tokens[tokens.index("scale") + 1])
+            except (IndexError, ValueError):
+                pass
+    return None
+
+
+def kanshi_with_scale(text, scale):
+    """Return the kanshi config text with the panel's scale set to `scale`.
+    Edits the existing output line in place; creates a profile if absent."""
+    value = f"{float(scale):.6f}"
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        tokens = _output_line_tokens(line)
+        if not tokens:
+            continue
+        indent = line[: len(line) - len(line.lstrip())]
+        if "scale" in tokens:
+            j = tokens.index("scale")
+            if j + 1 < len(tokens):
+                tokens[j + 1] = value
+            else:
+                tokens.append(value)
+        else:
+            k = tokens.index("enable") + 1 if "enable" in tokens else 2
+            tokens[k:k] = ["scale", value]
+        lines[i] = indent + " ".join(tokens)
+        return "\n".join(lines) + "\n"
+    # No profile for the panel yet: write one shaped like Control Centre's.
+    return (
+        "profile {\n"
+        f"\t\toutput {PANEL_OUTPUT} enable scale {value} mode {PANEL_MODE} "
+        "position 0,0 transform normal\n"
+        "}\n"
+    )
+
+
+def kanshi_apply(scale, also_greeter):
+    """Write ~/.config/kanshi/config, SIGHUP kanshi, optionally copy to the
+    greeter via pkexec. Returns (ok, greeter_state)."""
+    new = kanshi_with_scale(kanshi_read(), scale)
+    os.makedirs(os.path.dirname(KANSHI_PATH), exist_ok=True)
+    if os.path.exists(KANSHI_PATH):
+        try:
+            os.replace(KANSHI_PATH, KANSHI_PATH + ".bak")
+        except OSError:
+            pass
+    with open(KANSHI_PATH, "w", encoding="utf-8") as f:
+        f.write(new)
+    # kanshi re-reads its config on SIGHUP (this is what Control Centre does)
+    subprocess.run(["pkill", "--signal", "SIGHUP", "-x", "kanshi"], check=False)
+    greeter = "skip"
+    if also_greeter:
+        res = subprocess.run(
+            ["pkexec", "cp", "--", KANSHI_PATH, GREETER_KANSHI_PATH], check=False
+        )
+        greeter = "ok" if res.returncode == 0 else "fail"
+    return True, greeter
+
+
+def panel_scale():
+    cur = kanshi_current_scale(kanshi_read())
+    return cur if cur and cur > 0 else 1.0
+
+
+def fit_window(win):
+    """Keep the toolbox inside the 1024x768 panel at the current scale.
+    At x1.5 the logical desktop is ~682x512; a 460x520 window overflows
+    and the Display Apply button is unreachable."""
+    scale = panel_scale()
+    max_w = max(320, int(PANEL_PX[0] / scale) - 32)
+    max_h = max(280, int(PANEL_PX[1] / scale) - 64)
+    w = min(WIN_SIZE[0], max_w)
+    h = min(WIN_SIZE[1], max_h)
+    win.set_default_size(w, h)
+    win.resize(w, h)
+    geo = Gdk.Geometry()
+    geo.min_width = 300
+    geo.min_height = 260
+    geo.max_width = max_w
+    geo.max_height = max_h
+    win.set_geometry_hints(
+        None, geo, Gdk.WindowHints.MIN_SIZE | Gdk.WindowHints.MAX_SIZE
+    )
+
+
+def _tab_page(child):
+    """Wrap a tab body so a too-tall page can still scroll to its button."""
+    scroll = Gtk.ScrolledWindow()
+    scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    scroll.add(child)
+    return scroll
+
+
 class DiffDialog(Gtk.Dialog):
     """Colored unified diff of the pending config.txt change."""
 
@@ -234,7 +398,7 @@ class DiffDialog(Gtk.Dialog):
         self.add_button(T["cancel"], Gtk.ResponseType.CANCEL)
         apply_btn = self.add_button(T["write"], Gtk.ResponseType.OK)
         apply_btn.get_style_context().add_class("suggested-action")
-        self.set_default_size(560, 420)
+        self.set_default_size(480, 300)
 
         view = Gtk.TextView(
             editable=False, cursor_visible=False, monospace=True
@@ -278,27 +442,22 @@ class DiffDialog(Gtk.Dialog):
 class ToolboxWindow(Gtk.Window):
     def __init__(self):
         super().__init__(title=T["title"])
-        self.set_default_size(460, 300)
         self.set_position(Gtk.WindowPosition.CENTER)
+        fit_window(self)
 
         header = Gtk.HeaderBar(show_close_button=True)
         header.props.title = T["title"]
         self.set_titlebar(header)
 
-        box = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=12,
-            margin=16,
-        )
-        self.add(box)
+        nb = Gtk.Notebook()
+        nb.set_scrollable(True)
+        nb.set_show_border(False)
+        self.add(nb)
 
-        frame = Gtk.Frame(label=T["antenna_frame"])
-        box.pack_start(frame, False, False, 0)
-        radio_box = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=6, margin=12
+        # ---- tab: antenna ----
+        abox = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=8, margin=10
         )
-        frame.add(radio_box)
-
         self.radio_external = Gtk.RadioButton.new_with_label_from_widget(
             None, T["external"]
         )
@@ -312,18 +471,81 @@ class ToolboxWindow(Gtk.Window):
             self.radio_external, self.radio_internal, self.radio_default
         ):
             radio.get_child().set_line_wrap(True)
-            radio_box.pack_start(radio, False, False, 0)
+            abox.pack_start(radio, False, False, 0)
 
         self.status = Gtk.Label(xalign=0)
         self.status.set_line_wrap(True)
-        box.pack_start(self.status, False, False, 0)
+        abox.pack_start(self.status, False, False, 0)
 
         apply_btn = Gtk.Button(label=T["apply"])
         apply_btn.get_style_context().add_class("suggested-action")
         apply_btn.connect("clicked", self.on_apply)
-        box.pack_end(apply_btn, False, False, 0)
+        abox.pack_start(apply_btn, False, False, 0)
+        nb.append_page(_tab_page(abox), Gtk.Label(label=T["tab_antenna"]))
+
+        # ---- tab: display scale ----
+        sbox = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=8, margin=10
+        )
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        sbox.pack_start(row, False, False, 0)
+        self.scale_radios = {}
+        first = None
+        for sc in SCALES:
+            r = Gtk.RadioButton.new_with_label_from_widget(first, f"x{sc}")
+            first = first or r
+            self.scale_radios[sc] = r
+            row.pack_start(r, False, False, 0)
+        hint = Gtk.Label(xalign=0, label=T["scale_hint"])
+        hint.set_line_wrap(True)
+        hint.get_style_context().add_class("dim-label")
+        sbox.pack_start(hint, False, False, 0)
+        self.greeter_check = Gtk.CheckButton(label=T["scale_greeter"])
+        self.greeter_check.set_active(True)
+        sbox.pack_start(self.greeter_check, False, False, 0)
+        self.scale_status = Gtk.Label(xalign=0)
+        self.scale_status.set_line_wrap(True)
+        sbox.pack_start(self.scale_status, False, False, 0)
+        sapply = Gtk.Button(label=T["scale_apply"])
+        sapply.get_style_context().add_class("suggested-action")
+        sapply.connect("clicked", self.on_apply_scale)
+        sbox.pack_start(sapply, False, False, 0)
+        nb.append_page(_tab_page(sbox), Gtk.Label(label=T["tab_scale"]))
 
         self.load_state()
+        self.load_scale_state()
+        # 1.5x 时默认停在显示页，避免再被裁掉的按钮困住
+        if panel_scale() >= 1.5:
+            nb.set_current_page(1)
+
+    def load_scale_state(self):
+        cur = kanshi_current_scale(kanshi_read())
+        label = "1.0"
+        if cur is not None:
+            for sc in SCALES:
+                if abs(float(sc) - cur) < 1e-3:
+                    self.scale_radios[sc].set_active(True)
+                    label = sc
+                    break
+            else:
+                label = f"{cur:g}"
+        self.scale_status.set_markup(
+            T["scale_status"].format(scale=label, path=KANSHI_PATH)
+        )
+
+    def on_apply_scale(self, _btn):
+        scale = next(sc for sc, r in self.scale_radios.items() if r.get_active())
+        try:
+            _ok, greeter = kanshi_apply(scale, self.greeter_check.get_active())
+        except OSError as e:
+            self.info(T["scale_fail"].format(path=KANSHI_PATH, err=e))
+            return
+        self.load_scale_state()
+        fit_window(self)
+        self.info(
+            T["scale_applied"].format(scale=scale),
+            T["scale_applied_detail"].format(greeter=T["greeter_" + greeter]),
+        )
 
     def selected_mode(self):
         if self.radio_external.get_active():

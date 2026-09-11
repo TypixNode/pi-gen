@@ -5,7 +5,7 @@
 # 用法：./flash_esp32.sh   然后逐块插板，刷完拔板换下一块；Ctrl-C 退出
 set -u
 cd "$(dirname "$0")"
-BIN=typixdeck_esp32s3_full_20260821.bin
+BIN=typixdeck_esp32s3_full_20260910.bin
 [ -f "$BIN" ] || { echo "找不到 $BIN"; exit 1; }
 
 flash_one() {

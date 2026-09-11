@@ -1,0 +1,103 @@
+#!/bin/bash
+# TypixDeck: push Pi telemetry to the ESP32-S3 dashboard over its CDC port.
+#
+# One line every INTERVAL seconds:
+#   EGGFLY_PI_INFO model=CM4 rev=1.0 cpu=72.1 nvme=41 fan=3200 fanpwm=60 fansrc=emc2301 thr=0x0 freq=1500 load=0.52 up=1234
+# thr = vcgencmd get_throttled raw bits (the ESP decodes them into words),
+# freq = current ARM clock in MHz (cpufreq scaling_cur_freq).
+# The ESP firmware (typixdeck_esp32s3_lcd_init_touch_gui_uac_cdc) parses this in
+# its CDC magic-string handler and shows it on the status chip / PI SIG page.
+#
+# Started by udev (99-typixdeck-esp.rules) as soon as the ESP enumerates as
+# 303a:80c3, bound to the device so it stops by itself while flashing.
+DEV=${1:-/dev/typixdeck-esp}
+INTERVAL=${INTERVAL:-2}
+
+model_short() {
+    local m; m=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null)
+    case "$m" in
+        *"Compute Module 5"*)  echo CM5 ;;
+        *"Compute Module 4S"*) echo CM4S ;;
+        *"Compute Module 4"*)  echo CM4 ;;
+        *"Compute Module 3"*)  echo CM3 ;;
+        *"Compute Module 0"*|*"Compute Module Zero"*) echo CM0 ;;
+        *"Compute Module"*)    echo CM1 ;;
+        *"Pi 5"*)              echo PI5 ;;
+        *"Pi 4"*)              echo PI4 ;;
+        *"Zero 2"*)            echo ZERO2 ;;
+        *)                     echo PI ;;
+    esac
+}
+model_rev() {
+    tr -d '\0' < /proc/device-tree/model 2>/dev/null | sed -n 's/.*Rev \([0-9.]*\).*/\1/p'
+}
+hwmon_by_name() {   # $1=name → hwmon dir
+    local d; for d in /sys/class/hwmon/hwmon*; do
+        [ "$(cat "$d/name" 2>/dev/null)" = "$1" ] && { echo "$d"; return; }
+    done
+}
+cpu_temp() {
+    local t; t=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null) || return
+    printf '%d.%d' $((t / 1000)) $(((t % 1000) / 100))
+}
+nvme_temp() {
+    local d; d=$(hwmon_by_name nvme); [ -n "$d" ] || return
+    local t; t=$(cat "$d/temp1_input" 2>/dev/null) || return
+    echo $((t / 1000))
+}
+# Fan: EMC2301 on the TypixDeck board (CM4/CM5, i2c-fan overlay), the Pi 5 /
+# CM5 RP1 PWM fan ("pwmfan"), or a GPIO fan - first hwmon with a tacho wins.
+fan_dir() {
+    local n d
+    for n in emc2305 emc2301 pwmfan cooling_fan gpio_fan; do
+        d=$(hwmon_by_name "$n"); [ -n "$d" ] && [ -r "$d/fan1_input" ] && { echo "$d"; return; }
+    done
+    for d in /sys/class/hwmon/hwmon*; do
+        [ -r "$d/fan1_input" ] && { echo "$d"; return; }
+    done
+}
+fan_rpm() {
+    local d; d=$(fan_dir); [ -n "$d" ] || return
+    cat "$d/fan1_input" 2>/dev/null
+}
+fan_pwm_pct() {   # 0-255 duty → percent
+    local d; d=$(fan_dir); [ -n "$d" ] || return
+    local p; p=$(cat "$d/pwm1" 2>/dev/null) || return
+    echo $(( (p * 100 + 127) / 255 ))
+}
+fan_src() {
+    local d; d=$(fan_dir); [ -n "$d" ] || return
+    cat "$d/name" 2>/dev/null
+}
+throttled() {
+    command -v vcgencmd >/dev/null || return
+    vcgencmd get_throttled 2>/dev/null | sed -n 's/throttled=//p'
+}
+cpu_freq_mhz() {
+    local k; k=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null) || return
+    echo $((k / 1000))
+}
+
+MODEL=$(model_short); REV=$(model_rev)
+
+# raw tty: no echo (otherwise the ESP's own stats output would be echoed back
+# into it as "commands"), no CR/LF translation, don't wait for carrier
+stty -F "$DEV" 115200 raw -echo -echoe -echok -echoctl -echoke -onlcr -icrnl clocal || exit 1
+
+while :; do
+    line="model=$MODEL"
+    [ -n "$REV" ] && line="$line rev=$REV"
+    v=$(cpu_temp);  [ -n "$v" ] && line="$line cpu=$v"
+    v=$(nvme_temp); [ -n "$v" ] && line="$line nvme=$v"
+    v=$(fan_rpm);   [ -n "$v" ] && line="$line fan=$v"
+    v=$(fan_pwm_pct); [ -n "$v" ] && line="$line fanpwm=$v"
+    v=$(fan_src);   [ -n "$v" ] && line="$line fansrc=$v"
+    v=$(throttled); [ -n "$v" ] && line="$line thr=$v"
+    v=$(cpu_freq_mhz); [ -n "$v" ] && line="$line freq=$v"
+    read -r l1 _ < /proc/loadavg && line="$line load=$l1"
+    read -r up _ < /proc/uptime  && line="$line up=${up%.*}"
+    # open/close per write: DTR is only asserted briefly, the port stays free
+    # for esptool / esp_screenshot.py between writes
+    printf 'EGGFLY_PI_INFO %s\n' "$line" > "$DEV" || exit 1
+    sleep "$INTERVAL"
+done
