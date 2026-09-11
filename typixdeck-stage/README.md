@@ -108,10 +108,15 @@ labwc/xwayland/wf-panel-pi). Both failure modes were confirmed on-device.
 
 Installs the **TypixDeck Toolbox** (`/usr/local/bin/typixdeck-toolbox`), a
 small GTK3/Python settings app, plus its `.desktop` entry and a desktop
-shortcut for the first user. Two tabs keep the window short enough to use
+shortcut for the first user. Three tabs keep the window short enough to use
 on the 1024×768 panel at x1.5: **Antenna** (Wi-Fi/BT: external U.FL /
-internal PCB / module default) and **Display** (kanshi scale 1.0 / 1.25 /
-1.5, same file and SIGHUP reload as Control Centre). Antenna Apply never
+internal PCB / module default), **Display** (kanshi scale 1.0 / 1.25 /
+1.5, same file and SIGHUP reload as Control Centre) and **Sources** (APT:
+official archives ↔ Tsinghua TUNA mirror, rewriting the `URIs:` lines of
+`/etc/apt/sources.list.d/{debian,raspi}.sources`; the originals are backed
+up once as `*.bak-official` when the mirror is first enabled and restored
+verbatim when switching back, optional `apt-get update` in the same pkexec
+call). Antenna Apply never
 writes silently: it shows a colored unified diff of the pending
 `config.txt` change first, edits semantically (uncomments an existing line
 in place instead of appending duplicates, comments out instead of deleting)

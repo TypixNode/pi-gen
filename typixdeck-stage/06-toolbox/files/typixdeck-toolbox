@@ -23,19 +23,29 @@ Control Centre writes (~/.config/kanshi/config), reloads kanshi with SIGHUP
 (exactly what Control Centre does), and optionally copies the profile to the
 login screen (/etc/xdg/labwc-greeter/config.kanshi) via pkexec.
 
+Also switches the APT sources between the official archives and a domestic
+mirror (Tsinghua TUNA) by rewriting the URIs in the two deb822 files under
+/etc/apt/sources.list.d. The originals are backed up once as *.bak-official
+the first time the mirror is enabled, and switching back restores that copy
+(falling back to the reverse URI mapping when no backup exists). The pending
+change is shown as a diff first; writing and the optional `apt-get update`
+run as a single pkexec call.
+
 UI language follows the system locale (zh* -> Chinese, otherwise English).
 """
 
 import difflib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gdk, Gtk, Pango  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
 
 CONFIG_PATH = "/boot/firmware/config.txt"
 MARK_BEGIN = "# --- TypixDeck toolbox ---"
@@ -104,6 +114,32 @@ STRINGS = {
         "greeter_skip": "was not changed",
         "greeter_fail": "could not be written (authorization cancelled)",
         "scale_fail": "Could not write {path}: {err}",
+        "tab_apt": "Sources",
+        "apt_domestic": "Domestic mirror (Tsinghua TUNA, https)",
+        "apt_official": "Official (deb.debian.org, archive.raspberrypi.com)",
+        "apt_hint":
+            "Rewrites the URIs in the two .sources files under "
+            "/etc/apt/sources.list.d. The originals are backed up once as "
+            "*.bak-official when the mirror is first enabled; switching back "
+            "restores that copy.",
+        "apt_update": "Run apt update after writing",
+        "apt_status": "Active: <b>{state}</b>   backup: {backup}",
+        "apt_state_domestic": "domestic mirror (Tsinghua TUNA)",
+        "apt_state_official": "official archives",
+        "apt_state_custom": "custom / mixed",
+        "apt_backup_yes": "present (*.bak-official)",
+        "apt_backup_no": "none",
+        "apt_apply": "Apply sources",
+        "apt_working": "Writing sources and running apt update, please wait\u2026",
+        "apt_diff_title": "Confirm changes to APT sources",
+        "apt_written": "APT sources updated",
+        "apt_update_ok": "apt update finished successfully.",
+        "apt_update_skipped":
+            "apt update was not run; run it before installing packages.",
+        "apt_update_failed": "Sources were written but apt update failed:\n{log}",
+        "apt_write_failed_detail":
+            "Authorization was cancelled or pkexec failed; "
+            "the sources files were not modified.",
     },
     "zh": {
         "title": "TypixDeck 工具箱",
@@ -145,6 +181,28 @@ STRINGS = {
         "greeter_skip": "未改动",
         "greeter_fail": "写入失败（授权被取消）",
         "scale_fail": "无法写入 {path}: {err}",
+        "tab_apt": "软件源",
+        "apt_domestic": "国内源（清华 TUNA，https）",
+        "apt_official": "官方源（deb.debian.org、archive.raspberrypi.com）",
+        "apt_hint":
+            "改写 /etc/apt/sources.list.d 下两个 .sources 文件里的 URI。"
+            "首次切到国内源时把原文件备份为 *.bak-official，换回官方源时"
+            "直接还原备份。",
+        "apt_update": "写入后运行 apt update",
+        "apt_status": "当前生效: <b>{state}</b>   备份: {backup}",
+        "apt_state_domestic": "国内源（清华 TUNA）",
+        "apt_state_official": "官方源",
+        "apt_state_custom": "自定义 / 混合",
+        "apt_backup_yes": "已有（*.bak-official）",
+        "apt_backup_no": "无",
+        "apt_apply": "应用软件源",
+        "apt_working": "正在写入软件源并运行 apt update，请稍候…",
+        "apt_diff_title": "确认修改 APT 软件源",
+        "apt_written": "已写入软件源",
+        "apt_update_ok": "apt update 已成功完成。",
+        "apt_update_skipped": "未运行 apt update，安装软件前请先执行。",
+        "apt_update_failed": "软件源已写入，但 apt update 失败：\n{log}",
+        "apt_write_failed_detail": "授权被取消或 pkexec 出错，软件源文件未改动。",
     },
 }
 
@@ -352,6 +410,142 @@ def kanshi_apply(scale, also_greeter):
     return True, greeter
 
 
+# ---------------------------------------------------------------------------
+# APT sources: official <-> domestic mirror, with one-time backups
+# ---------------------------------------------------------------------------
+APT_SOURCES = (
+    "/etc/apt/sources.list.d/debian.sources",
+    "/etc/apt/sources.list.d/raspi.sources",
+)
+APT_BACKUP_SUFFIX = ".bak-official"
+# (official host/path, mirror host/path). Official archives are served
+# over http, the mirror over https. Compared as whole strings so
+# "debian/" can never match "debian-security/".
+APT_MIRRORS = (
+    ("deb.debian.org/debian-security/",
+     "mirrors.tuna.tsinghua.edu.cn/debian-security/"),
+    ("deb.debian.org/debian/", "mirrors.tuna.tsinghua.edu.cn/debian/"),
+    ("archive.raspberrypi.com/debian/",
+     "mirrors.tuna.tsinghua.edu.cn/raspberrypi/"),
+)
+APT_OFFICIAL, APT_DOMESTIC, APT_CUSTOM = "official", "domestic", "custom"
+
+
+def _bare_uri(uri):
+    """Scheme stripped, exactly one trailing slash."""
+    for scheme in ("https://", "http://"):
+        if uri.startswith(scheme):
+            uri = uri[len(scheme):]
+            break
+    return uri.rstrip("/") + "/"
+
+
+def _map_uri(uri, to_domestic):
+    bare = _bare_uri(uri)
+    for official, mirror in APT_MIRRORS:
+        src, dst = (official, mirror) if to_domestic else (mirror, official)
+        if bare == src:
+            return ("https://" if to_domestic else "http://") + dst
+    return uri
+
+
+def apt_transform(text, to_domestic):
+    """Rewrite every `URIs:` line of a deb822 .sources file."""
+    out = []
+    for line in text.splitlines():
+        if line.startswith("URIs:"):
+            uris = line[len("URIs:"):].split()
+            line = "URIs: " + " ".join(_map_uri(u, to_domestic) for u in uris)
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def apt_read(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def apt_uris(text):
+    uris = []
+    for line in text.splitlines():
+        if line.startswith("URIs:"):
+            uris += [_bare_uri(u) for u in line[len("URIs:"):].split()]
+    return uris
+
+
+def apt_state(texts):
+    uris = [u for t in texts for u in apt_uris(t)]
+    if not uris:
+        return APT_CUSTOM
+    if all(u in {m for _, m in APT_MIRRORS} for u in uris):
+        return APT_DOMESTIC
+    if all(u in {o for o, _ in APT_MIRRORS} for u in uris):
+        return APT_OFFICIAL
+    return APT_CUSTOM
+
+
+def apt_backups_present():
+    return any(os.path.exists(p + APT_BACKUP_SUFFIX) for p in APT_SOURCES)
+
+
+def apt_plan(mode):
+    """[(path, old, new)] for switching to `mode`. Going back to official
+    prefers the .bak-official copy taken when the mirror was first enabled
+    and falls back to the reverse URI mapping."""
+    plan = []
+    for path in APT_SOURCES:
+        old = apt_read(path)
+        if not old:
+            continue
+        new = None
+        if mode == APT_OFFICIAL:
+            new = apt_read(path + APT_BACKUP_SUFFIX) or None
+        if new is None:
+            new = apt_transform(old, mode == APT_DOMESTIC)
+        plan.append((path, old, new))
+    return plan
+
+
+def apt_apply(plan, mode, run_update):
+    """Write the planned files as root in ONE pkexec call (backing the
+    originals up first when enabling the mirror) and optionally run
+    apt-get update. Returns (rc, update_log_tail): rc 0 = all good,
+    3 = files written but apt update failed, anything else = not written."""
+    tmpdir = tempfile.mkdtemp(prefix="typixdeck-apt-")
+    try:
+        log = os.path.join(tmpdir, "update.log")
+        script = ["set -e"]
+        for i, (path, _old, new) in enumerate(plan):
+            tmp = os.path.join(tmpdir, f"src{i}")
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(new)
+            os.chmod(tmp, 0o644)
+            if mode == APT_DOMESTIC:
+                bak = path + APT_BACKUP_SUFFIX
+                script.append(f"[ -e '{bak}' ] || cp -p -- '{path}' '{bak}'")
+            script.append(f"cp -- '{tmp}' '{path}' && chmod 644 '{path}'")
+        if run_update:
+            script.append(f"apt-get update > '{log}' 2>&1 || exit 3")
+        script_path = os.path.join(tmpdir, "apply.sh")
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(script) + "\n")
+        os.chmod(tmpdir, 0o755)   # root reads it; pkexec keeps our uid's dir
+        cmd = ["sh", script_path]
+        if os.geteuid() != 0:
+            cmd = ["pkexec"] + cmd
+        rc = subprocess.run(cmd, check=False).returncode
+        tail = ""
+        if run_update and os.path.exists(log):
+            with open(log, encoding="utf-8", errors="replace") as f:
+                tail = "".join(f.readlines()[-6:])
+        return rc, tail
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def panel_scale():
     cur = kanshi_current_scale(kanshi_read())
     return cur if cur and cur > 0 else 1.0
@@ -389,9 +583,9 @@ def _tab_page(child):
 class DiffDialog(Gtk.Dialog):
     """Colored unified diff of the pending config.txt change."""
 
-    def __init__(self, parent, old, new):
+    def __init__(self, parent, old, new, title=None, path=CONFIG_PATH):
         super().__init__(
-            title=T["diff_title"],
+            title=title or T["diff_title"],
             transient_for=parent,
             flags=0,
         )
@@ -416,8 +610,8 @@ class DiffDialog(Gtk.Dialog):
         diff = difflib.unified_diff(
             old.splitlines(keepends=True),
             new.splitlines(keepends=True),
-            fromfile=CONFIG_PATH + T["diff_from"],
-            tofile=CONFIG_PATH + T["diff_to"],
+            fromfile=path + T["diff_from"],
+            tofile=path + T["diff_to"],
         )
         for line in diff:
             end = buf.get_end_iter()
@@ -512,8 +706,38 @@ class ToolboxWindow(Gtk.Window):
         sbox.pack_start(sapply, False, False, 0)
         nb.append_page(_tab_page(sbox), Gtk.Label(label=T["tab_scale"]))
 
+        # ---- tab: APT sources ----
+        pbox = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=8, margin=10
+        )
+        self.apt_radio_domestic = Gtk.RadioButton.new_with_label_from_widget(
+            None, T["apt_domestic"]
+        )
+        self.apt_radio_official = Gtk.RadioButton.new_with_label_from_widget(
+            self.apt_radio_domestic, T["apt_official"]
+        )
+        for radio in (self.apt_radio_domestic, self.apt_radio_official):
+            radio.get_child().set_line_wrap(True)
+            pbox.pack_start(radio, False, False, 0)
+        ahint = Gtk.Label(xalign=0, label=T["apt_hint"])
+        ahint.set_line_wrap(True)
+        ahint.get_style_context().add_class("dim-label")
+        pbox.pack_start(ahint, False, False, 0)
+        self.apt_update_check = Gtk.CheckButton(label=T["apt_update"])
+        self.apt_update_check.set_active(True)
+        pbox.pack_start(self.apt_update_check, False, False, 0)
+        self.apt_status = Gtk.Label(xalign=0)
+        self.apt_status.set_line_wrap(True)
+        pbox.pack_start(self.apt_status, False, False, 0)
+        papply = Gtk.Button(label=T["apt_apply"])
+        papply.get_style_context().add_class("suggested-action")
+        papply.connect("clicked", self.on_apply_apt)
+        pbox.pack_start(papply, False, False, 0)
+        nb.append_page(_tab_page(pbox), Gtk.Label(label=T["tab_apt"]))
+
         self.load_state()
         self.load_scale_state()
+        self.load_apt_state()
         # 1.5x 时默认停在显示页，避免再被裁掉的按钮困住
         if panel_scale() >= 1.5:
             nb.set_current_page(1)
@@ -546,6 +770,64 @@ class ToolboxWindow(Gtk.Window):
             T["scale_applied"].format(scale=scale),
             T["scale_applied_detail"].format(greeter=T["greeter_" + greeter]),
         )
+
+    # ---- APT sources ----
+    def load_apt_state(self):
+        state = apt_state([apt_read(p) for p in APT_SOURCES])
+        if state == APT_DOMESTIC:
+            self.apt_radio_domestic.set_active(True)
+        elif state == APT_OFFICIAL:
+            self.apt_radio_official.set_active(True)
+        backup = T["apt_backup_yes" if apt_backups_present() else "apt_backup_no"]
+        self.apt_status.set_markup(
+            T["apt_status"].format(state=T["apt_state_" + state], backup=backup)
+        )
+
+    def on_apply_apt(self, _btn):
+        mode = (
+            APT_DOMESTIC if self.apt_radio_domestic.get_active() else APT_OFFICIAL
+        )
+        plan = [p for p in apt_plan(mode) if p[1] != p[2]]
+        if not plan:
+            self.info(T["no_change"], T["apt_state_" + apt_state(
+                [apt_read(p) for p in APT_SOURCES])])
+            return
+        # One combined diff: each file introduced by a "## path" header.
+        old = "".join(f"## {p}\n{o}\n" for p, o, _n in plan)
+        new = "".join(f"## {p}\n{n}\n" for p, _o, n in plan)
+        dlg = DiffDialog(
+            self, old, new, title=T["apt_diff_title"],
+            path=os.path.dirname(APT_SOURCES[0]),
+        )
+        response = dlg.run()
+        dlg.destroy()
+        if response != Gtk.ResponseType.OK:
+            return
+        run_update = self.apt_update_check.get_active()
+        self.set_sensitive(False)
+        self.apt_status.set_text(T["apt_working"])
+        threading.Thread(
+            target=self._apt_worker, args=(plan, mode, run_update), daemon=True
+        ).start()
+
+    def _apt_worker(self, plan, mode, run_update):
+        try:
+            rc, tail = apt_apply(plan, mode, run_update)
+        except OSError as e:
+            rc, tail = -1, str(e)
+        GLib.idle_add(self._apt_done, rc, tail, run_update)
+
+    def _apt_done(self, rc, tail, run_update):
+        self.set_sensitive(True)
+        self.load_apt_state()
+        if rc == 0:
+            detail = T["apt_update_ok" if run_update else "apt_update_skipped"]
+            self.info(T["apt_written"], detail)
+        elif rc == 3:
+            self.info(T["apt_written"], T["apt_update_failed"].format(log=tail))
+        else:
+            self.info(T["write_failed"], T["apt_write_failed_detail"])
+        return False
 
     def selected_mode(self):
         if self.radio_external.get_active():

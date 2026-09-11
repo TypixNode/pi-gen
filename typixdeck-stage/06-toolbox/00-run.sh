@@ -1,6 +1,6 @@
 #!/bin/bash -e
 
-# TypixDeck toolbox: GTK app (tabbed: Wi-Fi antenna + display scale).
+# TypixDeck toolbox: GTK app (tabbed: Wi-Fi antenna + display scale + APT sources).
 # python3-gi and GTK are already part of the desktop stages.
 #
 # The image ships NO antenna configuration at all (hardware default ant1 =
