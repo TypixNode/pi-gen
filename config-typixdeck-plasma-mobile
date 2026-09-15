@@ -8,6 +8,11 @@ ARCH=arm64
 STAGE_LIST="stage0 stage1 stage2 plasma-mobile-stage typixdeck-stage"
 DEPLOY_COMPRESSION=xz
 
+# The dwc2-fixed CM5 kernel, downloaded by typixdeck-stage/00-install-kernel
+# (see config-typixdeck); a missing kernel fails the build.
+export TYPIXDECK_KERNEL_DEBS_URL="${TYPIXDECK_KERNEL_DEBS_URL:-https://github.com/TypixNode/pi-gen/releases/download/kernel-dwc2fix-6.18.44-4}"
+export TYPIXDECK_REQUIRE_KERNEL="${TYPIXDECK_REQUIRE_KERNEL:-1}"
+
 # stage2 ships an EXPORT_IMAGE (the Lite image). We only want the final image,
 # which is exported by typixdeck-stage, so use pi-gen's SKIP_IMAGES mechanism
 # to keep stage2 out of the export list. This config is sourced by build.sh

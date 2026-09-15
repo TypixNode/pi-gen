@@ -30,10 +30,16 @@ scoped to `[cm5]`: only the CM5 routes USB through the dwc2 controller, the
 CM4 runs `otg_mode=1` on the 2711 built-in XHCI (no ISO-OUT split issue)
 and boots the stock kernel - the 2711 firmware hangs on the rainbow splash
 with this image anyway (verified on-device). The `.deb` files come
-from `make bindeb-pkg` in the patched kernel tree and are too big for git;
-drop them into `00-install-kernel/files/debs/` before building. Without them
-the step logs a warning and keeps the stock kernel; set
-`TYPIXDECK_REQUIRE_KERNEL=1` to make a missing deb fatal for factory builds.
+from `make bindeb-pkg` in the patched kernel tree and are too big for git.
+They are published as assets of the `kernel-dwc2fix-6.18.44-4` release
+(with a `SHA256SUMS`); the CM5 variant configs (`config-typixdeck`,
+`-plasma-mobile`, `-phosh`) export `TYPIXDECK_KERNEL_DEBS_URL` pointing at it,
+so CI downloads and verifies them, and `TYPIXDECK_REQUIRE_KERNEL=1`, so a
+missing kernel fails the build. (Until 2026-09 CI had no debs and every
+published image silently shipped the stock kernel with a warning in the
+log.) A local build can still drop the debs into
+`00-install-kernel/files/debs/` instead. After rebuilding the kernel, upload
+a new release and bump the URL in the three configs.
 
 ### `00-install-packages`
 

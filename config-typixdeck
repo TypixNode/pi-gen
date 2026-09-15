@@ -25,6 +25,13 @@ STAGE_LIST="stage0 stage1 stage2 stage3 stage4 typixdeck-stage"
 
 TARGET_HOSTNAME="${TARGET_HOSTNAME:-typixdeck}"
 
+# The dwc2-fixed CM5 kernel (USB audio behind the FE2.1 hub). The debs are
+# too big for git, so typixdeck-stage/00-install-kernel downloads them from
+# this release; a missing kernel fails the build rather than shipping the
+# stock one.
+export TYPIXDECK_KERNEL_DEBS_URL="${TYPIXDECK_KERNEL_DEBS_URL:-https://github.com/TypixNode/pi-gen/releases/download/kernel-dwc2fix-6.18.44-4}"
+export TYPIXDECK_REQUIRE_KERNEL="${TYPIXDECK_REQUIRE_KERNEL:-1}"
+
 # Neutral defaults; Raspberry Pi Imager's advanced options override them all.
 LOCALE_DEFAULT="${LOCALE_DEFAULT:-en_US.UTF-8}"
 KEYBOARD_KEYMAP="${KEYBOARD_KEYMAP:-us}"

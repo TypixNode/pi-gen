@@ -5,11 +5,24 @@
 # is what makes USB audio behind the FE2.1 hub work on the CM5 carrier.
 #
 # The .deb files are produced by `make bindeb-pkg` in the kernel tree and are
-# too big for git; drop them into files/debs/ before building (see the stage
-# README for where they come from).
+# too big for git. A local build can drop them into files/debs/; otherwise,
+# when TYPIXDECK_KERNEL_DEBS_URL is set (the CM5 variant configs set it), they
+# are downloaded from that GitHub release and checked against its SHA256SUMS.
+# See the stage README for where they come from.
 
 DEB_DIR="files/debs"
 IMAGE_DEB="$(ls "${DEB_DIR}"/linux-image-*dwc2fix*_arm64.deb 2>/dev/null | head -n1 || true)"
+
+if [ -z "${IMAGE_DEB}" ] && [ -n "${TYPIXDECK_KERNEL_DEBS_URL:-}" ]; then
+	echo "Downloading the dwc2fix kernel debs from ${TYPIXDECK_KERNEL_DEBS_URL}"
+	install -d "${DEB_DIR}"
+	curl -fL --retry 3 -o "${DEB_DIR}/SHA256SUMS" "${TYPIXDECK_KERNEL_DEBS_URL}/SHA256SUMS"
+	for deb in $(awk '{print $2}' "${DEB_DIR}/SHA256SUMS"); do
+		curl -fL --retry 3 -o "${DEB_DIR}/${deb}" "${TYPIXDECK_KERNEL_DEBS_URL}/${deb}"
+	done
+	(cd "${DEB_DIR}" && sha256sum -c SHA256SUMS)
+	IMAGE_DEB="$(ls "${DEB_DIR}"/linux-image-*dwc2fix*_arm64.deb 2>/dev/null | head -n1 || true)"
+fi
 
 if [ -z "${IMAGE_DEB}" ]; then
 	if [ "${TYPIXDECK_REQUIRE_KERNEL:-0}" = "1" ]; then
@@ -17,10 +30,10 @@ if [ -z "${IMAGE_DEB}" ]; then
 		echo "Build it with 'make bindeb-pkg' in the patched kernel tree first." >&2
 		exit 1
 	fi
-	# The debs are too big for git and are not available in CI, so the stock
-	# kernel is kept: everything but USB audio behind the FE2.1 hub on the
-	# CM5 carrier works with it. Set TYPIXDECK_REQUIRE_KERNEL=1 (factory
-	# builds) to make a missing deb fatal instead.
+	# Without the debs the stock kernel is kept: everything but USB audio
+	# behind the FE2.1 hub on the CM5 carrier works with it. The CM5 variant
+	# configs set TYPIXDECK_REQUIRE_KERNEL=1 so a missing deb fails the build
+	# instead of silently shipping an image without the fix.
 	echo "WARNING: no dwc2fix kernel .deb in ${DEB_DIR}; keeping the stock kernel." >&2
 	exit 0
 fi
