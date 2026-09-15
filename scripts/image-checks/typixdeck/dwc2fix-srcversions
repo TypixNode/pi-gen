@@ -1,0 +1,9 @@
+# srcversion of dwc2.ko in each dwc2fix kernel build that carries the ISO-OUT
+# split fix ("usb: dwc2: host: No ISOC OUT start-split allowed in uframe 7",
+# docs/patches/ in the TypixDeck repo). srcversion is a hash of the module's
+# sources, so it changes with the patch and not with the compiler or build
+# host. When the kernel is rebuilt, add its line here (read it with
+# `modinfo -F srcversion dwc2`, or with module_field in verify-typixdeck-image):
+#
+# <srcversion>            <kernel release>   <release with the debs>
+F4158667D3832B7103314DA   6.18.44-dwc2fix+   kernel-dwc2fix-6.18.44-4

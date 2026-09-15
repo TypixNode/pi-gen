@@ -1,0 +1,240 @@
+#!/bin/bash
+#
+# Post-build checks for the TypixDeck image variants (config-typixdeck*).
+# Mounts the image read-only and sources every check file in
+# scripts/image-checks/typixdeck/ in name order. A FAIL fails the build (exit
+# 1); WARN and SKIP only report. To add a check, drop a new NN-name.sh into
+# that directory - see its README.md for the helpers available to it.
+#
+# Run as root, since it loop-mounts the image:
+#
+#   sudo BUILD_CONFIG=config-typixdeck ./scripts/verify-typixdeck-image work/*/export-image/*.img
+#
+# or against already-extracted partitions (for developing a check):
+#
+#   sudo BUILD_CONFIG=config-typixdeck ./scripts/verify-typixdeck-image --dirs <boot-dir> <root-dir>
+#
+# Environment:
+#   BUILD_CONFIG              pi-gen config the image was built from; its
+#                             TYPIXDECK_* settings decide which checks are
+#                             required (the config is sourced in a sandbox)
+#   TYPIXDECK_REQUIRE_KERNEL  overrides the config's value
+#   GITHUB_STEP_SUMMARY       when set, a result table is appended to it
+
+set -u
+
+usage() {
+	echo "usage: $0 <image.img> | --dirs <boot-dir> <root-dir>" >&2
+	exit 2
+}
+
+CHECK_DIR="$(dirname "$(realpath "$0")")/image-checks/typixdeck"
+
+MNT=""
+LOOP=""
+# shellcheck disable=SC2317  # reached through the EXIT trap
+cleanup() {
+	if [ -n "$MNT" ]; then
+		umount "$MNT/boot" 2>/dev/null || true
+		umount "$MNT/root" 2>/dev/null || true
+	fi
+	if [ -n "$LOOP" ]; then
+		losetup -d "$LOOP" 2>/dev/null || true
+	fi
+	if [ -n "$MNT" ]; then
+		rmdir "$MNT/boot" "$MNT/root" "$MNT" 2>/dev/null || true
+	fi
+}
+trap cleanup EXIT
+
+if [ "${1:-}" = --dirs ]; then
+	[ $# -eq 3 ] && [ -d "$2" ] && [ -d "$3" ] || usage
+	BOOT="$(realpath "$2")"
+	ROOT="$(realpath "$3")"
+else
+	IMG="${1:-}"
+	[ -n "$IMG" ] && [ -f "$IMG" ] || usage
+	if [ "$(id -u)" != 0 ]; then
+		echo "$0 must run as root to mount the image" >&2
+		exit 2
+	fi
+	LOOP="$(losetup --show --find --partscan --read-only "$IMG")"
+	# Same partition-node dance as verify-slim-image: --partscan does not make
+	# every kernel scan at attach time, and there may be no udev to create them.
+	partprobe "$LOOP" 2>/dev/null || true
+	if command -v udevadm >/dev/null 2>&1; then
+		udevadm settle --timeout=10 || true
+	fi
+	for part in "${LOOP}p1" "${LOOP}p2"; do
+		if [ ! -b "$part" ]; then
+			majmin="$(lsblk -r -n -o "NAME,MAJ:MIN" "$LOOP" |
+				awk -v n="${part#/dev/}" '$1 == n {print $2}')"
+			if [ -n "$majmin" ]; then
+				mknod "$part" b "${majmin%:*}" "${majmin#*:}" 2>/dev/null || true
+			fi
+		fi
+		if [ ! -b "$part" ]; then
+			echo "no device node appeared for $part" >&2
+			exit 2
+		fi
+	done
+	MNT="$(mktemp -d)"
+	mkdir -p "$MNT/boot" "$MNT/root"
+	mount -o ro "${LOOP}p1" "$MNT/boot" || { echo "cannot mount the boot partition" >&2; exit 2; }
+	mount -o ro "${LOOP}p2" "$MNT/root" || { echo "cannot mount the root partition" >&2; exit 2; }
+	BOOT="$MNT/boot"
+	ROOT="$MNT/root"
+fi
+
+# Read a variable from the variant config without its side effects on the
+# working tree (the configs touch SKIP_IMAGES markers under BASE_DIR).
+config_value() {
+	[ -n "${BUILD_CONFIG:-}" ] && [ -f "$BUILD_CONFIG" ] || return 0
+	env -i PATH="$PATH" bash -c '
+		BASE_DIR="$(mktemp -d)"
+		mkdir -p "$BASE_DIR/stage2" "$BASE_DIR/stage4" "$BASE_DIR/slim-desktop-stage"
+		. "$1" >/dev/null 2>&1
+		eval "printf %s \"\${$2:-}\""
+		rm -rf "$BASE_DIR"' _ "$(realpath "$BUILD_CONFIG")" "$1"
+}
+TYPIXDECK_REQUIRE_KERNEL="${TYPIXDECK_REQUIRE_KERNEL:-$(config_value TYPIXDECK_REQUIRE_KERNEL)}"
+
+# --- helpers for the check files ---------------------------------------------
+
+PASS=0
+FAIL=0
+WARN=0
+SKIP=0
+RESULTS=""
+GROUP=""
+
+record() {
+	RESULTS+="| ${GROUP} | $1 | ${2//|/\\|} |"$'\n'
+}
+
+# check "description" command [args...]: PASS when the command succeeds,
+# otherwise FAIL (fails the build) with the first lines of its output.
+check() {
+	local desc="$1" out
+	shift
+	if out="$("$@" 2>&1)"; then
+		printf '  PASS  %s\n' "$desc"
+		PASS=$((PASS + 1))
+		record PASS "$desc"
+	else
+		printf '  FAIL  %s\n' "$desc"
+		[ -n "$out" ] && printf '%s\n' "$out" | head -n5 | sed 's/^/        /'
+		FAIL=$((FAIL + 1))
+		record "**FAIL**" "$desc"
+	fi
+}
+
+# warn "description" command [args...]: like check, but a miss only warns.
+warn() {
+	local desc="$1"
+	shift
+	if "$@" >/dev/null 2>&1; then
+		printf '  PASS  %s\n' "$desc"
+		PASS=$((PASS + 1))
+		record PASS "$desc"
+	else
+		printf '  WARN  %s\n' "$desc"
+		WARN=$((WARN + 1))
+		record WARN "$desc"
+	fi
+}
+
+# skip "description" "reason"
+skip() {
+	printf '  SKIP  %s (%s)\n' "$1" "$2"
+	SKIP=$((SKIP + 1))
+	record SKIP "$1 ($2)"
+}
+
+# config_txt_has <section> <line>: config.txt has exactly <line> while the
+# conditional filter <section> is in effect ("all" before any filter).
+config_txt_has() {
+	awk -v want="$2" -v sect="$1" -v cur=all '
+		{ sub(/\r$/, ""); line = $0; sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line) }
+		line ~ /^\[.*\]$/ { cur = substr(line, 2, length(line) - 2); next }
+		line == want && cur == sect { found = 1 }
+		END { exit !found }' "$BOOT/config.txt"
+}
+
+# decompress <file>: cat a possibly compressed file (kernel modules and such).
+decompress() {
+	case "$1" in
+	*.xz) xz -dc -- "$1" ;;
+	*.zst) zstd -dc -- "$1" ;;
+	*.gz) gzip -dc -- "$1" ;;
+	*) cat -- "$1" ;;
+	esac
+}
+
+# module_field <module.ko[.xz]> <field>: a modinfo field, without needing a
+# kmod that can read the target's modules.
+module_field() {
+	decompress "$1" | tr '\0' '\n' | sed -n "s/^$2=//p" | head -n1
+}
+
+# kernel_image_has_version <kernel.img> <release>: the image is that kernel.
+kernel_image_has_version() {
+	if [ "$(od -An -tx1 -N2 "$1" | tr -d ' ')" = 1f8b ]; then
+		gzip -dc "$1"
+	else
+		cat "$1"
+	fi | grep -a -q -F "Linux version $2 "
+}
+
+# initramfs_file_matches <initramfs> <path-inside> <file>: the initramfs
+# carries a byte-identical copy of <file> at <path-inside>.
+initramfs_file_matches() {
+	local tmp rc
+	tmp="$(mktemp)"
+	if command -v bsdtar >/dev/null 2>&1; then
+		bsdtar -xOf "$1" "$2" > "$tmp" 2>/dev/null
+	elif command -v cpio >/dev/null 2>&1; then
+		(cd / && cpio -i --quiet --to-stdout "$2" < "$1") > "$tmp" 2>/dev/null
+	else
+		echo "neither bsdtar nor cpio is installed"
+		rm -f "$tmp"
+		return 1
+	fi
+	if [ ! -s "$tmp" ]; then
+		echo "$2 is not in $(basename "$1")"
+		rc=1
+	elif cmp -s "$tmp" "$3"; then
+		rc=0
+	else
+		echo "$2 differs: initramfs $(stat -c %s "$tmp") bytes, root filesystem $(stat -c %s "$3") bytes"
+		rc=1
+	fi
+	rm -f "$tmp"
+	return "$rc"
+}
+
+# --- run the checks ----------------------------------------------------------
+
+echo "== TypixDeck image checks (config: ${BUILD_CONFIG:-none}, require dwc2fix kernel: ${TYPIXDECK_REQUIRE_KERNEL:-0})"
+for f in "$CHECK_DIR"/[0-9]*.sh; do
+	GROUP="$(basename "$f" .sh)"
+	echo "== $GROUP"
+	# shellcheck disable=SC1090
+	. "$f"
+done
+
+echo "== $PASS passed, $FAIL failed, $WARN warnings, $SKIP skipped"
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+	{
+		echo "### TypixDeck image checks"
+		echo
+		echo "$PASS passed, $FAIL failed, $WARN warnings, $SKIP skipped"
+		echo
+		echo "| Group | Result | Check |"
+		echo "|---|---|---|"
+		printf '%s' "$RESULTS"
+		echo
+	} >> "$GITHUB_STEP_SUMMARY"
+fi
+
+[ "$FAIL" -eq 0 ]

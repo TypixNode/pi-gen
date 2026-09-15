@@ -264,6 +264,14 @@ jobs:
               "$BUILD_VARIANT" "$(numfmt --to=si --suffix=B "$SIZE")" "$SIZE" \
               >> "$GITHUB_STEP_SUMMARY"
           fi
+          # The TypixDeck variants have hardware promises to keep (the
+          # dwc2-fixed CM5 kernel above all); any FAIL stops the release.
+          # Add checks under scripts/image-checks/typixdeck/.
+          case "$BUILD_CONFIG" in
+          config-typixdeck*)
+            sudo -E ./scripts/verify-typixdeck-image "$IMG"
+            ;;
+          esac
 
       - name: Assemble the release
         run: |
