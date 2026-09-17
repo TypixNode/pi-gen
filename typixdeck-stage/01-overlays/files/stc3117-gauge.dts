@@ -30,6 +30,16 @@
 				charge-full-design-microamp-hours = <2400000>;
 				voltage-min-design-microvolt = <3000000>;
 				voltage-max-design-microvolt = <4200000>;
+				/*
+				 * Measured on a 0720 board (CM5) with a CPU load
+				 * step while charging: dV/dI = 155 mOhm falling,
+				 * 119 mOhm rising. This is the pack as the gauge
+				 * sees it - cell + protection board + wiring -
+				 * which is what the IR compensation needs. The
+				 * driver's 200 mOhm fallback overstates it by
+				 * ~45 % and seeds the SOC about 15 points low.
+				 */
+				factory-internal-resistance-micro-ohms = <140000>;
 			};
 		};
 	};
@@ -55,5 +65,6 @@
 		i2c_csi_dsi0 = <&frag1>,"target:0=",<&i2c_csi_dsi0>;
 		capacity-uah = <&typixdeck_battery>,"charge-full-design-microamp-hours:0";
 		shunt-uohm = <&stc3117>,"shunt-resistor-micro-ohms:0";
+		rint-uohm = <&typixdeck_battery>,"factory-internal-resistance-micro-ohms:0";
 	};
 };

@@ -78,6 +78,27 @@
 #define CHG_END_CURRENT			20
 #define APP_MIN_CURRENT			(-5)
 #define BATTERY_FULL				95
+/*
+ * Re-seed the gauge when the OCV it derives from its own SOC and the OCV
+ * measured at the terminals disagree by more than this. Comparing voltages
+ * rather than percentages is deliberate: along the flat part of a Li-ion
+ * curve a large SOC error is worth only a few mV, and there the coulomb
+ * counter is the better estimate anyway - so this never fires where
+ * re-seeding could not help.
+ */
+#define STC3117_RESEED_OCV_DELTA_UV		120000
+/*
+ * ... and only after that many consecutive steady samples. REG_VOLTAGE and
+ * REG_CURRENT are converted in separate cycles, so across a load step the two
+ * do not belong together and the IR-corrected OCV can be hundreds of mV out.
+ * On a deck whose USB input was dropping in and out, one such mismatched pair
+ * (3803 mV paired with +691 mA while the pack was in fact sagging under a
+ * 1.4 A discharge) was enough to throw an 83 % gauge down to 39 %.
+ */
+#define STC3117_SEED_VOTES			5	/* ~10 s at the 2 s poll */
+#define STC3117_SEED_STEADY_UA			200000
+/* RAM byte 10: set once this driver has seeded the gauge for this battery */
+#define STC3117_SEED_MARK			0x5D
 #define CRC8_POLYNOMIAL			0x07
 #define CRC8_INIT				0x00
 
@@ -89,11 +110,52 @@ enum stc3117_state {
 	STC3117_POWERDN,
 };
 
-/* Default ocv curve Li-ion battery */
+/*
+ * Rest OCV curve of the 604070 4.2 V LiCoO2 pack, in mV, against the SOC
+ * breakpoints below. Two things mainline gets wrong for this board:
+ *
+ *  - its curve ends at 4320 mV, which belongs to a 4.35 V cell. Fed a 4.2 V
+ *    pack it tops out near 91 % and the deck never shows a full battery.
+ *  - it pairs the 16 points with an even 0/6.67/13.3/... split, while it is
+ *    the SOC table that decides the pairing. REG_SOCTAB is left at ST's
+ *    default (0/3/6/10/15/.../90/100 %, verified by dumping 0x50-0x5F on a
+ *    0720 board), so the even split silently shifts the whole curve.
+ *
+ * Both tables are written together now, so the pairing no longer depends on
+ * whatever the other MCU behind the mux left in the chip.
+ */
 static const int ocv_value[16] = {
-	3400, 3582, 3669, 3676, 3699, 3737, 3757, 3774,
-	3804, 3844, 3936, 3984, 4028, 4131, 4246, 4320
+	3300, 3450, 3568, 3640, 3680, 3700, 3730, 3750,
+	3790, 3820, 3870, 3900, 3940, 4020, 4100, 4200
 };
+
+/* REG_SOCTAB0..15, 0.5 % per LSB: 0, 3, 6, 10, 15 ... 90, 100 % */
+static const u8 soc_value[16] = {
+	0x00, 0x06, 0x0c, 0x14, 0x1e, 0x28, 0x32, 0x3c,
+	0x50, 0x64, 0x78, 0x82, 0x8c, 0xa0, 0xb4, 0xc8
+};
+
+/*
+ * OCV in uV that the curve assigns to a SOC in tenths of a percent - the
+ * inverse of what the gauge does, used to tell a believable gauge state from
+ * an impossible one.
+ */
+static int stc3117_ocv_from_soc(int soc10)
+{
+	int i;
+
+	soc10 = clamp(soc10, 0, MAX_SOC);
+	for (i = 1; i < STC3117_OCV_TABLE_SIZE; i++) {
+		int lo = soc_value[i - 1] * 5;	/* 0.5 % units -> tenths */
+		int hi = soc_value[i] * 5;
+
+		if (soc10 <= hi)
+			return (ocv_value[i - 1] +
+				(ocv_value[i] - ocv_value[i - 1]) *
+				(soc10 - lo) / (hi - lo)) * 1000;
+	}
+	return ocv_value[STC3117_OCV_TABLE_SIZE - 1] * 1000;
+}
 
 union stc3117_internal_ram {
 	u8 ram_bytes[STC3117_RAM_SIZE];
@@ -104,7 +166,8 @@ union stc3117_internal_ram {
 	u16 vm_cnf;     /* 6-7    Bytes */
 	u8 soc;         /* 8      Byte  */
 	u8 state;       /* 9      Byte  */
-	u8 unused[5];   /* 10-14  Bytes */
+	u8 seed_mark;   /* 10     Byte  */
+	u8 unused[4];   /* 11-14  Bytes */
 	u8 crc;         /* 15     Byte  */
 	} reg;
 };
@@ -124,11 +187,13 @@ struct stc3117_data {
 	union stc3117_internal_ram ram_data;
 	struct stc3117_battery_info battery_info;
 
-	u8 soc_tab[16];
 	int cc_cnf;
 	int vm_cnf;
 	int rint_mohm;		/* battery internal resistance, default 200 */
 	bool takeover;		/* gauge was already running at probe: never reset it */
+	bool need_seed;		/* gauge carries no seed mark for this battery */
+	int seed_votes;		/* consecutive steady samples asking for a seed */
+	int seed_prev_current;	/* battery current at the previous vote */
 	bool inited;		/* stc3117_init() succeeded (chip reachable) */
 	int cc_adj;
 	int vm_adj;
@@ -255,9 +320,8 @@ static int stc3117_set_para(struct stc3117_data *data)
 		ret |= regmap_bulk_write(data->regmap, STC3117_ADDR_OCV_TABLE,
 					 ocv_regs, sizeof(ocv_regs));
 	}
-	if (data->soc_tab[1] != 0)
-		ret |= regmap_bulk_write(data->regmap, STC3117_ADDR_SOC_TABLE,
-				  data->soc_tab, STC3117_OCV_TABLE_SIZE);
+	ret |= regmap_bulk_write(data->regmap, STC3117_ADDR_SOC_TABLE,
+				 soc_value, sizeof(soc_value));
 
 	ret |= regmap_write(data->regmap, STC3117_ADDR_CC_CNF_H,
 				(data->ram_data.reg.cc_cnf >> 8) & 0xFF);
@@ -279,6 +343,86 @@ static int stc3117_set_para(struct stc3117_data *data)
 	return ret;
 };
 
+/*
+ * Restart the gauge from a measured open-circuit voltage: reload the curve and
+ * the configuration, GG_RST, then hand it REG_OCV so it looks the SOC up in
+ * the table it has just been given.
+ */
+static int stc3117_seed(struct stc3117_data *data, int ocv_uv)
+{
+	int code = ocv_uv / 550;	/* REG_OCV: 0.55 mV/LSB */
+	int ret;
+
+	data->ram_data.reg.testword = STC3117_RAM_TESTWORD;
+	data->ram_data.reg.cc_cnf = data->cc_cnf;
+	data->ram_data.reg.vm_cnf = data->vm_cnf;
+	data->ram_data.reg.seed_mark = STC3117_SEED_MARK;
+
+	ret = stc3117_set_para(data);
+	ret |= regmap_write(data->regmap, STC3117_ADDR_OCV_H, (code >> 8) & 0xFF);
+	ret |= regmap_write(data->regmap, STC3117_ADDR_OCV_L, code & 0xFF);
+
+	/* GG_RST restarted the conversions: wait them out before trusting reads */
+	data->ram_data.reg.state = STC3117_INIT;
+	return ret;
+}
+
+/*
+ * Decide, one sample at a time, whether the gauge's SOC can be true. A sample
+ * only counts when the current has barely moved since the last one, because
+ * voltage and current come from different conversion cycles; and it takes
+ * STC3117_SEED_VOTES of them in a row to act, so no transient can reseed a
+ * healthy gauge. Call with fresh readings and after ram_read().
+ */
+static void stc3117_seed_check(struct stc3117_data *data)
+{
+	int ir_drop_uv, ocv_uv, curve_uv, slack_uv;
+	bool steady, impossible;
+
+	if (data->voltage <= 0 || data->soc < 0)
+		return;
+
+	steady = abs(data->batt_current - data->seed_prev_current) <
+		 STC3117_SEED_STEADY_UA;
+	data->seed_prev_current = data->batt_current;
+	if (!steady) {
+		data->seed_votes = 0;
+		return;
+	}
+
+	/* uA * mOhm / 1000 = uV; positive current (charging) raises V */
+	ir_drop_uv = data->batt_current / 1000 * data->rint_mohm;
+	ocv_uv = clamp(data->voltage - ir_drop_uv, 3000000, 4300000);
+	curve_uv = stc3117_ocv_from_soc(data->soc);
+	/*
+	 * Rint is a measured but still nominal number, so the IR correction is
+	 * only good to roughly +-50 %: widen the tolerance with the load, or
+	 * charging at 1 A reads as a wrong SOC.
+	 */
+	slack_uv = STC3117_RESEED_OCV_DELTA_UV + abs(ir_drop_uv) / 2;
+	impossible = abs(ocv_uv - curve_uv) > slack_uv;
+
+	if (!data->need_seed && !impossible) {
+		data->seed_votes = 0;
+		return;
+	}
+	if (++data->seed_votes < STC3117_SEED_VOTES)
+		return;
+
+	dev_warn(&data->client->dev,
+		 "%s: %d.%d %% implies %d mV, terminals say %d mV at %d mA (OCV ~%d mV) - seeding\n",
+		 data->need_seed ? "gauge never seeded for this battery"
+				 : "reported SOC cannot be true",
+		 data->soc / 10, data->soc % 10, curve_uv / 1000,
+		 data->voltage / 1000, data->batt_current / 1000, ocv_uv / 1000);
+
+	if (stc3117_seed(data, ocv_uv))
+		dev_err(&data->client->dev, "seeding the gauge failed\n");
+	else
+		data->need_seed = false;
+	data->seed_votes = 0;
+}
+
 static int stc3117_init(struct stc3117_data *data)
 {
 	int id, ret;
@@ -298,11 +442,28 @@ static int stc3117_init(struct stc3117_data *data)
 	data->presence = 1;
 
 	/*
+	 * Battery-backed RAM: survives reboots and the I2C mux handing the
+	 * gauge to the ESP32, but not unplugging the pack.
+	 */
+	ret = ram_read(data);
+	if (ret)
+		return ret;
+
+	/*
 	 * Read-only takeover: if the gauge is already running (GG_RUN set) and
 	 * reports neither BATFAIL nor PORDET, somebody (boot ROM state, another
 	 * MCU behind an I2C mux, a previous driver instance) has configured it
 	 * and the coulomb counter holds valid state. Do not rewrite the OCV
 	 * table / CNF registers and never GG_RST - just read it.
+	 *
+	 * Whether that state is worth anything is a separate question, and one
+	 * a single sample cannot answer (see STC3117_SEED_VOTES), so it is left
+	 * to the polling task. All that is decided here is whether this driver
+	 * has ever seeded the gauge for this battery: without the mark in the
+	 * battery-backed RAM the SOC is meaningless. A gauge the ESP32-S3
+	 * started without anyone writing REG_OCV/REG_SOC counts coulombs up
+	 * from 0 %, so a freshly flashed deck sits at 6 % with a 4.07 V pack
+	 * and nothing downstream can tell that apart from a flat battery.
 	 */
 	{
 		int mode0;
@@ -314,16 +475,14 @@ static int stc3117_init(struct stc3117_data *data)
 		if ((mode0 & STC3117_GG_RUN) &&
 		    !(ctrl & (STC3117_BATFAIL | STC3117_PORDET))) {
 			data->takeover = true;
+			data->need_seed =
+				data->ram_data.reg.seed_mark != STC3117_SEED_MARK;
 			dev_info(&data->client->dev,
-				 "gauge already running (mode=0x%02x ctrl=0x%02x), read-only takeover\n",
-				 mode0, ctrl);
+				 "gauge already running (mode=0x%02x ctrl=0x%02x), read-only takeover%s\n",
+				 mode0, ctrl,
+				 data->need_seed ? ", unseeded - will seed from voltage" : "");
 		}
 	}
-
-	/* Read RAM data */
-	ret = ram_read(data);
-	if (ret)
-		return ret;
 
 	if (data->takeover) {
 		/* adopt whatever is there; keep our bookkeeping in RAM only */
@@ -385,6 +544,9 @@ static int stc3117_init(struct stc3117_data *data)
 	}
 
 	data->ram_data.reg.state = STC3117_INIT;
+	/* every path but the takeover has just configured and seeded the gauge */
+	if (!data->takeover)
+		data->ram_data.reg.seed_mark = STC3117_SEED_MARK;
 	data->ram_data.reg.crc = crc8(stc3117_crc_table,
 					data->ram_data.ram_bytes,
 					STC3117_RAM_SIZE - 1, CRC8_INIT);
@@ -411,7 +573,12 @@ static int stc3117_task(struct stc3117_data *data)
 	id = 0;
 	ret = regmap_read(data->regmap, STC3117_ADDR_ID, &id);
 	if (ret || id != STC3117_ID) {
-		data->presence = 0;
+		/*
+		 * Not answering is not "battery removed": on the TypixDeck the I2C
+		 * mux hands the gauge to the ESP32 whenever it owns the screen.
+		 * Keep PRESENT and the last readings (upower would otherwise drop
+		 * the battery); only BATFAIL below means removal.
+		 */
 		/* force a full re-init (takeover check) when it comes back */
 		data->inited = false;
 		return -EINVAL;
@@ -494,6 +661,14 @@ static int stc3117_task(struct stc3117_data *data)
 		data->ram_data.reg.state = STC3117_RUNNING;
 	}
 
+	/*
+	 * Only once the chip has settled: GG_RST zeroes the conversion counter,
+	 * so this also keeps a fresh seed from being voted on before the gauge
+	 * has had a chance to act on it.
+	 */
+	if (data->ram_data.reg.state == STC3117_RUNNING)
+		stc3117_seed_check(data);
+
 	if (data->ram_data.reg.state != STC3117_RUNNING) {
 		data->batt_current = -ENODATA;
 		data->temp = -ENODATA;
@@ -567,6 +742,23 @@ static int stc3117_get_property(struct power_supply *psy,
 			return -ENODATA;
 		val->intval = clamp((data->soc + 5) / 10, 0, 100);
 		break;
+	/*
+	 * charge_* in uAh: panel battery plugins (wfplug-batt / lxpanel batt)
+	 * ignore "capacity" and compute the percentage as charge_now /
+	 * charge_full, so without these the desktop shows 0 %. The gauge does
+	 * not learn capacity, so full = design (simple-battery in the overlay).
+	 */
+	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
+	case POWER_SUPPLY_PROP_CHARGE_FULL:
+		val->intval = data->battery_info.battery_capacity_mah * 1000;
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_NOW:
+		if (data->soc == -ENODATA)
+			return -ENODATA;
+		/* mAh * 1000 * (tenths of a percent / 1000) */
+		val->intval = data->battery_info.battery_capacity_mah *
+			      clamp(data->soc, 0, MAX_SOC);
+		break;
 	case POWER_SUPPLY_PROP_TEMP:
 		val->intval = data->temp;
 		break;
@@ -586,6 +778,9 @@ static enum power_supply_property stc3117_battery_props[] = {
 	POWER_SUPPLY_PROP_VOLTAGE_OCV,
 	POWER_SUPPLY_PROP_CURRENT_AVG,
 	POWER_SUPPLY_PROP_CAPACITY,
+	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
+	POWER_SUPPLY_PROP_CHARGE_FULL,
+	POWER_SUPPLY_PROP_CHARGE_NOW,
 	POWER_SUPPLY_PROP_TEMP,
 	POWER_SUPPLY_PROP_PRESENT,
 };
