@@ -3,7 +3,16 @@
 # Phosh session setup: boot to graphical.target and let phosh.service (shipped
 # by the phosh package: tty7, User=1000 = the first user, PAMName=login) start
 # the shell directly - no display manager on this Lite-based image.
+#
+# greetd has to go first, or none of that happens: phosh-core depends on phrog,
+# which pulls in greetd, whose postinst makes it /etc/systemd/system/
+# display-manager.service. Both units are then enabled, greetd takes tty7 and
+# the deck boots to the phrog lock screen instead of the shell - on a 4:3 panel
+# whose keypad does not fit, with the keyboard in the deck, which is as good as
+# locked out. The image shipped that way until 2026-09-18.
 on_chroot << CHROOT
+systemctl disable greetd || true
+rm -f /etc/systemd/system/display-manager.service
 systemctl set-default graphical.target
 systemctl enable phosh
 CHROOT
