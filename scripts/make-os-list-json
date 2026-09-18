@@ -182,7 +182,14 @@ def merge_entry(document, entry, group, group_description, limit):
 
 
 def add_referenced_devices(document):
-    """Add the EXTRA_DEVICES whose tags the OS entries use."""
+    """Add the EXTRA_DEVICES whose tags the OS entries use.
+
+    A device already in the document is refreshed from EXTRA_DEVICES rather
+    than left alone: every run merges into the published list, so skipping it
+    would freeze whatever description, icon or capabilities the list was first
+    created with. That is how "Foldable cyberdeck" survived in the live list
+    for weeks after the wording was fixed here.
+    """
     used = set()
     for entry in document["os_list"]:
         used.update(entry.get("devices", []))
@@ -193,12 +200,15 @@ def add_referenced_devices(document):
     for tag, device in EXTRA_DEVICES.items():
         if tag not in used:
             continue
-        if any(tag in d.get("tags", []) for d in devices):
-            continue
         if device.get("default"):
             for d in devices:
                 d["default"] = False
-        devices.insert(0, copy.deepcopy(device))
+        for i, d in enumerate(devices):
+            if tag in d.get("tags", []):
+                devices[i] = copy.deepcopy(device)
+                break
+        else:
+            devices.insert(0, copy.deepcopy(device))
 
 
 def main():

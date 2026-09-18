@@ -1,6 +1,6 @@
 name: Build TypixDeck image
 
-# The image variants for the TypixDeck, a foldable CM3/CM4/CM5 cyberdeck with
+# The image variants for the TypixDeck, a portable CM3/CM4/CM5 cyberdeck with
 # a 1024x768 DPI touchscreen: the stock Raspberry Pi desktop plus the
 # typixdeck-stage hardware support, a slim desktop that fits a Compute
 # Module 3's 4GB eMMC, a KDE Plasma Mobile variant and a Phosh variant.
