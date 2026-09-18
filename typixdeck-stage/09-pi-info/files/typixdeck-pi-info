@@ -45,29 +45,38 @@ nvme_temp() {
     local t; t=$(cat "$d/temp1_input" 2>/dev/null) || return
     echo $((t / 1000))
 }
-# Fan: EMC2301 on the TypixDeck board (CM4/CM5, i2c-fan overlay), the Pi 5 /
-# CM5 RP1 PWM fan ("pwmfan"), or a GPIO fan - first hwmon with a tacho wins.
+# Fan: the board's EMC2301 (i2c-fan overlay; the driver names it emc2305), the
+# Pi 5 / CM5 RP1 PWM fan ("pwmfan") and GPIO fans can all be present at once
+# while only one is wired to a fan - a CM5 with its fan on the module's own
+# 4-pin header still has an EMC2301 reporting 0 RPM with a live duty cycle.
+# Report the active one: the highest tacho reading, else the first with a
+# non-zero duty, else the first fan hwmon found.
 fan_dir() {
-    local n d
-    for n in emc2305 emc2301 pwmfan cooling_fan gpio_fan; do
-        d=$(hwmon_by_name "$n"); [ -n "$d" ] && [ -r "$d/fan1_input" ] && { echo "$d"; return; }
-    done
+    local d rpm pwm best="" best_rpm=0 duty="" first=""
     for d in /sys/class/hwmon/hwmon*; do
-        [ -r "$d/fan1_input" ] && { echo "$d"; return; }
+        [ -r "$d/fan1_input" ] || continue
+        [ -n "$first" ] || first=$d
+        rpm=$(cat "$d/fan1_input" 2>/dev/null)
+        if [ "${rpm:-0}" -gt "$best_rpm" ] 2>/dev/null; then best=$d; best_rpm=$rpm; fi
+        pwm=$(cat "$d/pwm1" 2>/dev/null)
+        if [ -z "$duty" ] && [ "${pwm:-0}" -gt 0 ] 2>/dev/null; then duty=$d; fi
     done
+    echo "${best:-${duty:-$first}}"
 }
+# The fan_* readers take the directory fan_dir picked for this line, so rpm,
+# duty and source always describe the same fan.
 fan_rpm() {
-    local d; d=$(fan_dir); [ -n "$d" ] || return
-    cat "$d/fan1_input" 2>/dev/null
+    [ -n "$1" ] || return
+    cat "$1/fan1_input" 2>/dev/null
 }
 fan_pwm_pct() {   # 0-255 duty → percent
-    local d; d=$(fan_dir); [ -n "$d" ] || return
-    local p; p=$(cat "$d/pwm1" 2>/dev/null) || return
+    [ -n "$1" ] || return
+    local p; p=$(cat "$1/pwm1" 2>/dev/null) || return
     echo $(( (p * 100 + 127) / 255 ))
 }
 fan_src() {
-    local d; d=$(fan_dir); [ -n "$d" ] || return
-    cat "$d/name" 2>/dev/null
+    [ -n "$1" ] || return
+    cat "$1/name" 2>/dev/null
 }
 throttled() {
     command -v vcgencmd >/dev/null || return
@@ -89,9 +98,10 @@ while :; do
     [ -n "$REV" ] && line="$line rev=$REV"
     v=$(cpu_temp);  [ -n "$v" ] && line="$line cpu=$v"
     v=$(nvme_temp); [ -n "$v" ] && line="$line nvme=$v"
-    v=$(fan_rpm);   [ -n "$v" ] && line="$line fan=$v"
-    v=$(fan_pwm_pct); [ -n "$v" ] && line="$line fanpwm=$v"
-    v=$(fan_src);   [ -n "$v" ] && line="$line fansrc=$v"
+    fan=$(fan_dir)
+    v=$(fan_rpm "$fan");     [ -n "$v" ] && line="$line fan=$v"
+    v=$(fan_pwm_pct "$fan"); [ -n "$v" ] && line="$line fanpwm=$v"
+    v=$(fan_src "$fan");     [ -n "$v" ] && line="$line fansrc=$v"
     v=$(throttled); [ -n "$v" ] && line="$line thr=$v"
     v=$(cpu_freq_mhz); [ -n "$v" ] && line="$line freq=$v"
     read -r l1 _ < /proc/loadavg && line="$line load=$l1"
