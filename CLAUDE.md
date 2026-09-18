@@ -62,18 +62,48 @@ Full rebuild from scratch: remove the SKIP files and `sudo docker rm -v pigen_wo
 
 - `--network host` is mandatory: `build.sh` curl-checks `APT_PROXY` and aborts if
   `127.0.0.1:3142` is unreachable from inside the build container.
-- Disk: the VM had ~15 GB free with the cache present; the export needs ~8 GB.
-  `docker image prune` on the rootless side and deleting old `deploy/*.img` on the
-  Mac are the safe ways to make room. Never `docker rm -v pigen_work` casually —
+- **Check free space in the VM before every build: `limactl shell default -- df -h /`
+  wants >= 15 GB.** The export needs ~8 GB on top of a ~5.5 GB rootfs copy, and on
+  2026-09-17 three builds in a row died on a 98 %-full disk - first as
+  `not enough free space in /var/cache/apt/archives`, then as
+  `cp: ... No space left on device` on the very last step, after the image had
+  already been built. Room comes from `sudo docker builder prune -af` (5.9 GB
+  that time) and from the old images, which live in **two** places:
+  `deploy/` on the Mac **and** `/pi-gen/deploy` inside the `pigen_work` volume,
+  which nothing cleans up:
+  `sudo docker run --rm --volumes-from pigen_work debian:trixie rm -f /pi-gen/deploy/*.img`
+  (`rm -rf /pi-gen/deploy` itself fails with `Device or resource busy` - it is a
+  mount point, so delete the contents). Never `docker rm -v pigen_work` casually -
   that is the 25 GB stage cache.
-- `deploy/` on the Mac accumulates 7 GB images; delete old ones by hand.
+- **The VM needs swap.** It has 3.8 GiB of RAM and shipped with none, and the
+  export-image dist-upgrade of a stale cache pushed `apt-get` to 2.39 GB RSS ->
+  `dpkg ... received signal 9` (the OOM killer; `sudo dmesg | grep -i oom-kill`
+  confirms it). A 6 GB swapfile is set up and in `/etc/fstab`
+  (`/swapfile none swap sw,nofail 0 0`), which survives a VM restart but not a
+  `limactl delete`. Recreate it with
+  `fallocate -l 6G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`.
+  Raising the VM to 8 GiB of RAM would be the real fix.
 - `typixdeck-stage/prerun.sh` copies the previous stage rootfs only when the stage
   dir does not exist — hence step 1 deletes it, otherwise the stage re-runs on top
   of its own old output (stale files survive).
-- The cached stage rootfs ages; export-image dist-upgrades it inside the sized
-  image and the stock 20 % margin overflowed on 2026-09-11 (`not enough free
-  space in /var/cache/apt/archives`) — hence `ROOT_MARGIN_PERCENT=45` in the dev
-  config. A full rebuild (fresh cache) does not need it.
+- **A stale stage cache is a bug, not something to work around with the margin.**
+  export-image dist-upgrades the cached rootfs *inside* the already-sized image,
+  so the older the cache the more free space the image must carry: a month-old
+  cache meant 200 packages / 553 MB and blew through the stock 20 % margin.
+  Raising `ROOT_MARGIN_PERCENT` to 45 does get the build through, and that is what
+  the dev config carried from 2026-09-11 - but it makes an 8.4 GB image, and a
+  **CM4002008 has only ~7.82 GB of eMMC**, so the result will not flash.
+  Shrinking afterwards does not rescue it either (see below). Refresh the cache
+  instead - `docker rm -v pigen_work`, remove the SKIP files, full rebuild - and
+  keep the margin at 20, which yields ~7.0 GB, the same as CI.
+- `scripts/shrink-image.sh` cuts an oversized image down (multi-pass
+  `resize2fs -M`, `sfdisk` for the partition - `parted -s resizepart` stops on its
+  own "are you sure?" prompt and silently leaves the table alone - then a mount +
+  fsck to prove the result). **Do not count on it to make an image fit**:
+  `resize2fs -M` bottomed out at 7.33 GB on a filesystem holding 6.04 GB, so an
+  8.41 GB image only came down to 8.19 GB. Even a perfectly packed filesystem
+  would land near 6.9 GB, i.e. ~200 MB under the CI image - so when an image has
+  to fit a fixed target, **build it the right size or just use the CI artifact**.
 - Lima's `docker` socket forward can report `EOF` right after `limactl start`
   while the rootless daemon is still down; start `user@501` + the user docker
   unit as in step 0.

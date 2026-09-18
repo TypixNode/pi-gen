@@ -1,6 +1,6 @@
 # 在官方 Raspberry Pi Imager 中烧录 TypixDeck 镜像
 
-本仓库的 CI 会自动构建 TypixDeck（基于 Raspberry Pi CM4/CM5 的折叠 cyberdeck，带 1024x768 DPI 触摸屏）的系统镜像，并发布一份 Raspberry Pi Imager 可以直接读取的 `os_list.json`。**不需要安装任何修改版 Imager**，官方 Imager 填一个自定义仓库 URL 即可看到 TypixDeck 设备和它的全部镜像。
+本仓库的 CI 会自动构建 TypixDeck（基于 Raspberry Pi CM4/CM5 的便携 cyberdeck，带 1024x768 DPI 触摸屏）的系统镜像，并发布一份 Raspberry Pi Imager 可以直接读取的 `os_list.json`。**不需要安装任何修改版 Imager**，官方 Imager 填一个自定义仓库 URL 即可看到 TypixDeck 设备和它的全部镜像。
 
 ## 版本要求
 
@@ -99,7 +99,7 @@ KonstaKANG 的构建采用 **CC BY-NC-SA 4.0（署名-非商业性使用-相同�
   "tags": ["typixdeck"],
   "default": true,
   "icon": "https://raw.githubusercontent.com/TypixNode/pi-gen/typixdeck/imager/typixdeck-icon.png",
-  "description": "Foldable cyberdeck based on the Raspberry Pi CM4/CM5 with a 1024x768 DPI touchscreen",
+  "description": "Portable cyberdeck based on the Raspberry Pi CM4/CM5 with a 1024x768 DPI touchscreen",
   "matching_type": "exclusive",
   "capabilities": []
 }
