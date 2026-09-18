@@ -62,6 +62,20 @@ dtoverlay=i2c-fan,emc2301,i2c_csi_dsi0
 # normally enables it by itself, this just makes it explicit. Both fans can
 # coexist - typixdeck-pi-info reports whichever hwmon has a tacho reading.
 dtparam=cooling_fan=on
+# ... but the stock curve is too timid for a deck in a case: it idles at PWM 75
+# (~29 %) from 50 C and only reaches 125 at 60 C, so the CM5 sits in the high
+# 50s doing nothing much. Raise the duty at every step and leave the trip
+# temperatures where they are. Measured on a CM5 (2026-09-18): PWM 75 -> 3.6k
+# RPM, 130 -> 6.5k, 160 -> 7.8k, 255 -> 10.0k.
+# fan_temp0..3 (50/60/67.5/75 C) and _hyst stay at their defaults; all twelve
+# fan_temp* parameters are defined by the CM5 DTBs themselves (verified with
+# strings on bcm2712-rpi-cm5-*.dtb), so these are firmware-supported names, not
+# overlay guesses - a wrong one here is how you end up with a board that boots
+# without a fan.
+dtparam=fan_temp0_speed=130
+dtparam=fan_temp1_speed=180
+dtparam=fan_temp2_speed=220
+dtparam=fan_temp3_speed=255
 # STC3117 battery gauge (U53, 0x70) on the same SDA0/SCL0 pair, behind the
 # Pi/ESP32 I2C mux (readable while the Pi owns the display). CM4: the default
 # target &i2c_csi_dsi is GPIO44/45 (i2c-10); &i2c_csi_dsi0 would be GPIO0/1,
