@@ -27,7 +27,11 @@ permissions:
 
 concurrency:
   group: cn-mirror
-  cancel-in-progress: false
+  # 一次 variant=all 的构建会连发 4 个 release，触发 4 次同步。这个任务是幂等的
+  # （每次都把线上同步成「当前该有的样子」），所以让后来的顶掉先前的，跑最后一次就够。
+  # 中途被取消也不会留下坏状态：rclone copy 没提交的分片不会变成可见对象，
+  # 下一次跑会补齐；repo.json 只在镜像传完且 HEAD 校验通过后才替换。
+  cancel-in-progress: true
 
 jobs:
   mirror:
