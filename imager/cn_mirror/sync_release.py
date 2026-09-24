@@ -163,8 +163,13 @@ def main() -> int:
     else:
         releases = [r for r in gh_json(f"/repos/{repo}/releases?per_page={args.scan}")
                     if not r.get("draft")]
+        # ⚠️ /releases 的返回顺序**不是**按时间倒序（实测 2026-09-24：同一个 flavor
+        # 的 797ff04(published 05:55) 排在 7123232(published 06:42) 前面）。
+        # 不自己排序就会把旧版本当成最新版发布出去。
+        releases.sort(key=lambda r: r.get("published_at") or r.get("created_at") or "",
+                      reverse=True)
         picked: dict[str, list[dict[str, Any]]] = {}
-        for rel in releases:                     # GitHub 按时间倒序返回
+        for rel in releases:
             img = next((a for a in rel.get("assets", []) if a["name"].endswith(".img.xz")), None)
             if not img:
                 continue
