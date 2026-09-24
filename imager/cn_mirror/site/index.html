@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{SITE_TITLE}}</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #191917; --muted: #6b6b66; --line: #e3e2de;
+    --card: #ffffff; --accent: #0b6b5a; --accent-soft: #e6f2ef; --code: #f2f1ed;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #171714; --fg: #ecebe6; --muted: #a09e97; --line: #302f2b;
+      --card: #201f1c; --accent: #5fc7ae; --accent-soft: #14312a; --code: #292824;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #171714; --fg: #ecebe6; --muted: #a09e97; --line: #302f2b;
+    --card: #201f1c; --accent: #5fc7ae; --accent-soft: #14312a; --code: #292824;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 48px 16px 80px; }
+  h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -.01em; }
+  h2 { font-size: 17px; margin: 40px 0 10px; }
+  p.lede { color: var(--muted); margin: 0 0 28px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+  .repo-url { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+  .repo-url input {
+    flex: 1 1 320px; min-width: 0; padding: 9px 11px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--code); color: var(--fg);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px;
+  }
+  button {
+    padding: 9px 14px; border-radius: 8px; border: 1px solid var(--accent);
+    background: var(--accent); color: var(--bg); font-size: 13px; cursor: pointer;
+  }
+  ol.steps { margin: 12px 0 0; padding-left: 20px; color: var(--muted); }
+  ol.steps b { color: var(--fg); font-weight: 600; }
+  ol.steps code { background: var(--code); padding: 1px 5px; border-radius: 4px; word-break: break-all; }
+  .img { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-top: 12px; background: var(--card); }
+  .img-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  .img-name { font-weight: 600; }
+  .img-date { color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .img-desc { color: var(--muted); font-size: 13px; margin: 4px 0 10px; }
+  .dl { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .dl a { color: var(--accent); }
+  .tag {
+    display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px;
+    background: var(--accent-soft); color: var(--accent); margin-right: 5px;
+  }
+  .sha { color: var(--muted); font-size: 11px; word-break: break-all; margin-top: 8px; }
+  .latest { border-color: var(--accent); }
+  footer { margin-top: 56px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>{{SITE_TITLE}}</h1>
+  <p class="lede">{{SITE_NOTE}}</p>
+
+  <div class="card">
+    <div class="repo-url">
+      <input id="repoUrl" readonly value="{{REPO_URL}}">
+      <button id="copyBtn">复制仓库地址</button>
+    </div>
+    <ol class="steps">
+      <li>Raspberry Pi Imager <b>2.0 及以上</b>：设置（齿轮）→ <b>内容仓库</b> → 使用自定义 URL → 粘贴上面的地址 → 重启 Imager，系统列表里就会出现 TypixDeckOS。</li>
+      <li>命令行等价写法：<code>rpi-imager --repo {{REPO_URL}}</code></li>
+      <li>镜像已内置 cloud-init，Imager 的高级选项（主机名 / 用户 / Wi-Fi / SSH / 时区）全部可用。</li>
+    </ol>
+  </div>
+
+  <h2>镜像版本 <span id="count" style="color:var(--muted);font-weight:400"></span></h2>
+  <div id="list"><p style="color:var(--muted)">加载 repo.json …</p></div>
+
+  <footer>
+    与 GitHub Release 逐字节同步，Imager 写卡前会校验 SHA256。
+    源仓库：<a id="site" href="https://github.com/TypixNode/pi-gen">TypixNode/pi-gen</a>
+  </footer>
+</div>
+
+<script>
+document.getElementById('copyBtn').addEventListener('click', e => {
+  const input = document.getElementById('repoUrl');
+  navigator.clipboard?.writeText(input.value).catch(() => { input.select(); document.execCommand('copy'); });
+  e.target.textContent = '已复制';
+  setTimeout(() => { e.target.textContent = '复制仓库地址'; }, 1600);
+});
+
+const size = n => n >= 1e9 ? (n / 1e9).toFixed(2) + ' GB' : (n / 1e6).toFixed(0) + ' MB';
+
+fetch('repo.json').then(r => r.json()).then(doc => {
+  const items = doc.os_list || [];
+  document.getElementById('count').textContent = `（${items.length} 个）`;
+  if (items[0]?.website) document.getElementById('site').href = items[0].website;
+  document.getElementById('list').innerHTML = items.map((it, i) => `
+    <div class="img${i === 0 ? ' latest' : ''}">
+      <div class="img-head">
+        <span class="img-name">${it.name}${i === 0 ? ' <span class="tag">最新</span>' : ''}</span>
+        <span class="img-date">${it.release_date || ''}</span>
+      </div>
+      <div class="img-desc">${it.description || ''}</div>
+      <div class="dl">
+        <a class="mono" href="${it.url}">${decodeURIComponent(it.url.split('/').pop())}</a>
+        <span class="img-date">${size(it.image_download_size)} · 解压后 ${size(it.extract_size)}</span>
+      </div>
+      <div class="sha">sha256(解压后) ${it.extract_sha256}</div>
+    </div>`).join('');
+}).catch(e => {
+  document.getElementById('list').innerHTML =
+    `<p style="color:#c0392b">repo.json 读取失败：${e}</p>`;
+});
+</script>
+</body>
+</html>

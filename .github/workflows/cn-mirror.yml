@@ -1,0 +1,122 @@
+# Release 发布后把镜像同步到 Cloudflare R2，刷新国内 Imager 内容仓库。
+#
+# 站点：https://dl.typixnode.com/           （镜像站首页）
+# 仓库：https://dl.typixnode.com/repo.json  （填进 Imager「内容仓库 → 使用自定义 URL」）
+#
+# 为什么在 GitHub runner 上做：Release → runner 走 GitHub 内网（秒级），
+# runner → R2 是入站流量（免费），两头都不花钱、不占国内带宽。
+#
+# Secrets：R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY
+#          （Cloudflare 控制台 → R2 → Manage API Tokens → Create API Token，
+#            权限 Object Read & Write，只勾 typixdeck 这个桶）
+# Variables：R2_BUCKET=typixdeck   CN_BASE_URL=https://dl.typixnode.com
+
+name: CN mirror
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      per_flavor:
+        description: 每个 flavor 保留几个版本（10 GB 免费额度，建议 1）
+        default: "1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cn-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 顺序很重要，保证任何时刻 repo.json 指向的对象都存在（用户永远点不到 404）：
+      #   ① 下载镜像 → ② 只增不删地传上去 → ③ HEAD 校验 → ④ 换 repo.json → ⑤ 最后删旧版
+      - name: ① 下载镜像并校验 sha256（总量卡在免费额度内）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 imager/cn_mirror/sync_release.py \
+            --repo ${{ github.repository }} \
+            --base-url '${{ vars.CN_BASE_URL }}' \
+            --per-flavor '${{ github.event.inputs.per_flavor || 1 }}' \
+            --max-total-gb '${{ vars.MAX_TOTAL_GB || 9 }}' \
+            --staging staging --out publish --copy-images
+          du -sh publish
+
+      - name: 配置 rclone 连 R2
+        run: |
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          mkdir -p ~/.config/rclone
+          cat > ~/.config/rclone/rclone.conf <<EOF
+          [r2]
+          type = s3
+          provider = Cloudflare
+          access_key_id = ${{ secrets.R2_ACCESS_KEY_ID }}
+          secret_access_key = ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          endpoint = https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          acl = private
+          EOF
+
+      - name: ② 传镜像和图标（copy：只增不删，旧版本还在，老 repo.json 继续有效）
+        env:
+          B: ${{ vars.R2_BUCKET }}
+          FLAGS: --s3-no-check-bucket --transfers 4 --checkers 8 --stats 30s --stats-one-line
+        run: |
+          # 文件名带 tag、内容永不变 → 让 CDN 长期缓存
+          rclone copy publish/images "r2:$B/images" $FLAGS \
+            --header-upload "Cache-Control: public, max-age=31536000, immutable"
+          rclone copy publish/icons  "r2:$B/icons"  $FLAGS \
+            --header-upload "Cache-Control: public, max-age=31536000, immutable"
+
+      - name: ③④ HEAD 校验后再换 repo.json（校验不过的条目回退 GitHub 链接，绝不留 404）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          B: ${{ vars.R2_BUCKET }}
+          FLAGS: --s3-no-check-bucket --stats-one-line
+        run: |
+          python3 imager/cn_mirror/sync_release.py \
+            --repo ${{ github.repository }} \
+            --base-url '${{ vars.CN_BASE_URL }}' \
+            --per-flavor '${{ github.event.inputs.per_flavor || 1 }}' \
+            --max-total-gb '${{ vars.MAX_TOTAL_GB || 9 }}' \
+            --staging staging --out publish --no-images --verify-urls
+          rclone copy publish "r2:$B" $FLAGS \
+            --include repo.json --include index.html \
+            --header-upload "Cache-Control: public, max-age=300"
+
+      - name: ⑤ 滚动清理：删掉 repo.json 不再引用的旧版本
+        env:
+          B: ${{ vars.R2_BUCKET }}
+        run: |
+          keep=$(ls publish/images)                       # 本次要保留的 tag
+          if [ -z "$keep" ]; then
+            echo "本次没有任何镜像，跳过清理（绝不清空线上内容）"; exit 0
+          fi
+          echo "保留：$keep"
+          for tag in $(rclone lsf "r2:$B/images" --dirs-only --s3-no-check-bucket | tr -d /); do
+            if ! grep -qx "$tag" <<<"$keep"; then
+              echo "删除旧版本 $tag"
+              rclone purge "r2:$B/images/$tag" --s3-no-check-bucket
+            fi
+          done
+          echo "--- 清理后用量（免费额度 10 GB）---"
+          rclone size "r2:$B" --s3-no-check-bucket
+
+      - name: 汇报
+        run: |
+          {
+            echo "### 国内镜像站已更新"
+            echo ""
+            echo '- Imager 内容仓库：`${{ vars.CN_BASE_URL }}/repo.json`'
+            echo "- 镜像站：${{ vars.CN_BASE_URL }}/"
+            echo ""
+            echo '```'
+            rclone size "r2:${{ vars.R2_BUCKET }}" --s3-no-check-bucket 2>&1 || true
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
