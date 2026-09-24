@@ -1,0 +1,11 @@
+{
+  "name": "dl-images",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-01",
+  "routes": [
+    { "pattern": "dl.typixnode.com/", "zone_name": "typixnode.com" },
+    { "pattern": "dl.typixnode.com/images/*", "zone_name": "typixnode.com" }
+  ],
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "typixdeck" }],
+  "observability": { "enabled": true }
+}
