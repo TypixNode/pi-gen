@@ -10,11 +10,35 @@
 
 ## 一、配置自定义仓库
 
-仓库地址（稳定 URL，始终指向最新构建）：
+**两个地址，按你在哪儿选**：
 
-```
-https://github.com/TypixNode/pi-gen/releases/download/typixdeck-latest/os_list.json
-```
+| | 仓库地址 | 适合 | 包含 |
+|---|---|---|---|
+| 🇨🇳 **国内镜像站** | `https://dl.typixnode.com/repo.json` | 中国大陆 | 每个变体**最新 1 个**镜像 |
+| 🌍 **GitHub（全量）** | `https://github.com/TypixNode/pi-gen/releases/download/typixdeck-latest/os_list.json` | 海外 | 全部变体 + 历史 Beta + Android |
+
+### 该用哪个？
+
+- **中国大陆用户用镜像站。** 同一台树莓派、同一时刻实测：GitHub Release 直连
+  **0.19 MB/s**（最差一次 3.5 KB/s），镜像站 **7.2 MB/s** —— 820 MB 的 slim 镜像
+  从 72 分钟降到约 2 分钟。
+- **海外用户用 GitHub。** 镜像站没有地域限制、全球都能访问（Cloudflare anycast），
+  但**对海外用户没有速度优势**：镜像体积超过 Cloudflare 免费版 512 MB 的可缓存上限，
+  不会被边缘缓存，每次下载都要从亚太区的 R2 存储桶拉，跨太平洋反而绕路。
+  美国出口实测两边在同一量级（镜像站 0.9–1.8 MB/s，GitHub 0.6–2.4 MB/s）。
+  GitHub 那份还多了历史 Beta 和 Android 镜像。
+
+> 镜像站的内容与 GitHub Release **逐字节一致**（同步时校验 `image_download_sha256`，
+> Imager 写卡前还会再校验解压后的 `extract_sha256`）。它只列每个变体最新 1 个版本，
+> 是为了守住 Cloudflare R2 的 10 GB 免费额度；**要历史 Beta 构建或 Android 镜像，
+> 用 GitHub 那个地址**。
+>
+> 镜像站永远不会给你 404：某个版本还没同步上来时，会由 Cloudflare 边缘代拉
+> GitHub Release 转发（实测仍有 6.5 MB/s），而不是留死链。
+> 想知道某次下载走的哪条路：`curl -sI <镜像 URL> | grep x-mirror-source`，
+> `r2` = 镜像站自己的存储，`github-origin` = 边缘代拉。
+
+镜像站首页（可直接点文件下载，不装 Imager 也行）：<https://dl.typixnode.com/>
 
 ### 方式 A：图形界面
 
@@ -26,6 +50,9 @@ https://github.com/TypixNode/pi-gen/releases/download/typixdeck-latest/os_list.j
 ### 方式 B：命令行
 
 ```bash
+# 国内
+rpi-imager --repo https://dl.typixnode.com/repo.json
+# 海外
 rpi-imager --repo https://github.com/TypixNode/pi-gen/releases/download/typixdeck-latest/os_list.json
 ```
 
@@ -44,6 +71,8 @@ rpi-imager --repo https://github.com/TypixNode/pi-gen/releases/download/typixdec
 > 注意：TypixDeck 设备的 `matching_type` 为 `exclusive`，即选中 TypixDeck 后只显示为它构建的镜像；反之，选择其他树莓派设备时不会看到 TypixDeck 镜像。想看到所有条目可选择 "No filtering"。
 
 ## 三、Beta 镜像保留策略
+
+> 国内镜像站不提供历史 Beta（只留每个变体最新 1 个），本节说的都是 GitHub 那份。
 
 CI 只保留每个变体**最近 5 个** Beta 构建的 Release，`os_list.json` 中的 Beta 子目录也同步只列最近 5 个。更早的 Beta 下载链接会失效（404）。如果想长期固定某一个构建，可以使用该构建自己 Release 页面里的 `os_list.json`（镜像和校验和永不变化）：
 

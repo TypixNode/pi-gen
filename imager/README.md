@@ -37,7 +37,21 @@ must always describe an archive that is actually downloadable.
 
 ## Using it in Imager
 
-The raw JSON URL:
+Pick the repository URL by where you are:
+
+| | URL | Notes |
+|---|---|---|
+| Mainland China | `https://dl.typixnode.com/repo.json` | Cloudflare R2 mirror, newest build per flavour only. Measured on a Raspberry Pi in Tianjin: **7.2 MB/s** vs **0.19 MB/s** straight from GitHub. |
+| Everywhere else | `https://github.com/TypixNode/pi-gen/releases/download/typixdeck-latest/os_list.json` | Full list: every flavour, historical betas, Android. |
+
+The mirror is byte-identical to the GitHub release (the sync verifies
+`image_download_sha256`, and Imager verifies `extract_sha256` before writing).
+It carries only the newest build per flavour to stay inside R2's 10 GB free
+tier; when a build has not been synced yet, the edge streams it straight from
+the GitHub release instead of 404ing. See `imager/cn_mirror/` and
+`.github/workflows/cn-mirror.yml`.
+
+The older per-branch raw JSON is still there but is not the published entry point:
 
 ```
 https://raw.githubusercontent.com/TypixNode/pi-gen/typixdeck/imager/typixnode-os.json
