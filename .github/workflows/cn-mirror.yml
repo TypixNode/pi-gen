@@ -14,6 +14,13 @@
 name: CN mirror
 
 on:
+  # 构建完成后同步。不能用 on.release —— CI 的 release 是 GITHUB_TOKEN 创建的，
+  # GitHub 为了防递归，不会让这类事件触发新的 workflow run（实测：20260924-797ff04
+  # 那批 release 发出来后本工作流一次都没触发）。workflow_run 不受这条限制。
+  workflow_run:
+    workflows: ["Build TypixDeck image"]
+    types: [completed]
+  # 手动发的 release（非 CI 创建）仍然能触发
   release:
     types: [published]
   workflow_dispatch:
@@ -36,6 +43,10 @@ concurrency:
 jobs:
   mirror:
     runs-on: ubuntu-latest
+    # 构建失败/取消时不要去同步一个不完整的发布
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v4
 
