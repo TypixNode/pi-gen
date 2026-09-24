@@ -33,6 +33,20 @@ export default {
     const [, tag, filename] = parts;
 
     // ---- 快路径：R2
+    if (request.method === "HEAD") {
+      const head = await env.BUCKET.head(key);
+      if (head) {
+        const headers = new Headers();
+        head.writeHttpMetadata(headers);
+        headers.set("etag", head.httpEtag);
+        headers.set("content-length", String(head.size));
+        headers.set("accept-ranges", "bytes");
+        headers.set("cache-control", "public, max-age=31536000, immutable");
+        headers.set("x-mirror-source", "r2");
+        return new Response(null, { status: 200, headers });
+      }
+    }
+
     const object = await env.BUCKET.get(key, {
       range: request.headers,
       onlyIf: request.headers,
@@ -47,8 +61,12 @@ export default {
       const body = "body" in object ? object.body : null;
       const status = body ? (request.headers.get("range") ? 206 : 200) : 304;
       if (object.range && body) {
-        const { offset = 0, length = object.size } = object.range;
+        const { offset = 0, length = object.size - offset } = object.range;
         headers.set("content-range", `bytes ${offset}-${offset + length - 1}/${object.size}`);
+        headers.set("content-length", String(length));
+      } else if (body) {
+        // R2 不会自动带 content-length，缺了它浏览器显示"未知大小"、也没法断点续传
+        headers.set("content-length", String(object.size));
       }
       return new Response(request.method === "HEAD" ? null : body, { status, headers });
     }
