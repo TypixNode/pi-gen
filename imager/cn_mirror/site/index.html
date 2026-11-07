@@ -103,7 +103,7 @@ fetch('repo.json').then(r => r.json()).then(doc => {
   document.getElementById('list').innerHTML = items.map((it, i) => `
     <div class="img${i === 0 ? ' latest' : ''}">
       <div class="img-head">
-        <span class="img-name">${it.name}${i === 0 ? ' <span class="tag">最新</span>' : ''}</span>
+        <span class="img-name">${it.name}${i === 0 ? ' <span class="tag">推荐</span>' : ''}</span>
         <span class="img-date">${it.release_date || ''}</span>
       </div>
       <div class="img-desc">${it.description || ''}</div>

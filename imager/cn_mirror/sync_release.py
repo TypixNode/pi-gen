@@ -117,7 +117,8 @@ def main() -> int:
     ap.add_argument("--base-url", help="国内站点根 URL，覆盖配置里的 base_url")
     ap.add_argument("--repo", help="GitHub 仓库，覆盖配置里的 github_repo")
     ap.add_argument("--tag", action="append", default=[], help="只同步这些 tag（可多次给）")
-    ap.add_argument("--flavors", nargs="*", help="只要这些 flavor（如 slim plasma-mobile），默认全要")
+    ap.add_argument("--flavors", nargs="*",
+                    help="只要这些 flavor（如 base plasma-mobile），默认全要（配置里 exclude_flavors 的除外）")
     ap.add_argument("--per-flavor", type=int, default=2, help="每个 flavor 保留最近几个版本（默认 2）")
     ap.add_argument("--all-tags", action="store_true",
                     help="连非 typixdeck-*-build-* 的 release 也收（默认只收 TypixDeck 自己的构建）")
@@ -148,6 +149,10 @@ def main() -> int:
     if "REPLACE-ME" in base_url and not args.proxy_prefix:
         ap.error("先把 typixdeck.config.json 里的 base_url 改成你的国内站点地址（或用 --base-url）")
 
+    # 下架的 flavor（2026-11-07 起 slim 不再发布）；用 --flavors 点名时仍可强制收
+    excluded = set(cfg.get("exclude_flavors", [])) - set(args.flavors or [])
+    default_flavor = cfg.get("default_flavor", "base")
+
     proxies = [x.rstrip("/") + "/" for x in (args.proxy_prefix or "").split(",") if x.strip()]
     proxy = proxies[0] if proxies else None
     if proxy:
@@ -176,7 +181,7 @@ def main() -> int:
             if not args.all_tags and not TAG_RE.match(rel["tag_name"]):
                 continue                         # 只发 TypixDeck 自己的镜像
             fl = flavor_of(rel["tag_name"], img["name"])
-            if args.flavors and fl not in args.flavors:
+            if (args.flavors and fl not in args.flavors) or fl in excluded:
                 continue
             if len(picked.setdefault(fl, [])) < args.per_flavor:
                 picked[fl].append(rel)
@@ -264,6 +269,7 @@ def main() -> int:
             else:
                 entry["url"] = f"{base_url}/images/{tag}/{fname}"
             entry["_github_url"] = asset["browser_download_url"]
+            entry["_flavor"] = flavor_of(tag, fname)
             if entry.get("icon"):
                 entry["icon"] = (proxy + entry["icon"] if proxy else
                                  localize_icon(entry["icon"], out / "icons", base_url, icon_cache))
@@ -273,7 +279,10 @@ def main() -> int:
         print("[error] 没有可发布的镜像", file=sys.stderr)
         return 1
 
+    # 默认 flavor（标准桌面版）排第一：Imager 列表和镜像站首页都把第一条当推荐项；
+    # 其余按日期从新到旧。
     entries.sort(key=lambda e: (e.get("release_date", ""), e.get("name", "")), reverse=True)
+    entries.sort(key=lambda e: e.get("_flavor") != default_flavor)
     entries += spares
 
     if args.verify_urls:
@@ -297,6 +306,7 @@ def main() -> int:
 
     for entry in entries:
         entry.pop("_github_url", None)
+        entry.pop("_flavor", None)
 
     doc = {"imager": {"devices": devices or []}, "os_list": entries}
     (out / "repo.json").write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n",
