@@ -1,5 +1,5 @@
 [Unit]
-Description=TypixDeck first-boot provisioning (flash blank ESP32-S3 / keyboard)
+Description=TypixDeck MCU provisioning (first boot: flash ESP32-S3 + reboot before the wizard; later: repair blank ESP32-S3 / keyboard)
 Documentation=file:///var/lib/typixdeck/provision.log
 # USB must be enumerated; run before any login screen or getty takes tty1.
 After=systemd-udev-settle.service local-fs.target

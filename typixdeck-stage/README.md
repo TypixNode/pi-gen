@@ -187,15 +187,36 @@ it live with `pkill -HUP kanshi`.
 
 ### `11-provision`
 
-First-boot provisioning for the factory: `typixdeck-provision.service` (root
-oneshot, before the display manager) flashes a **blank or bricked ESP32-S3**
-(enumerates as `303a:1001` / `303a:0009` instead of the app's `303a:80c3`)
-with the bundled full image, and a **blank KeebDeck** (STM32F042 in DFU,
-`0483:df11`) with the bundled QMK firmware, then powers off so the user does
-a clean power-on. Nothing to flash = exits in milliseconds. Progress goes to
-the DPI console (tty1) once the ESP hands the screen over, the ACT LED
-blinks fast during the blind phase, everything is logged to
-`/var/lib/typixdeck/provision.log`. Opt out with
+MCU provisioning: `typixdeck-provision.service` (root oneshot, before the
+display manager, i.e. before the first-boot wizard / greeter).
+
+* **First boot** (no `/var/lib/typixdeck/firstboot-flash.done` yet): the
+  ESP32-S3 is **always** flashed with the bundled full image - a chip already
+  running an app (`303a:80c3`) is sent `EGGFLY_REBOOT_TO_BOOT_MODE` to drop
+  into the ROM bootloader first - then the marker is written and the Pi
+  **reboots**, so the wizard (piwiz) or the Imager-customised desktop only
+  comes up on the boot after the firmware is in place. Boot order on a fresh
+  card: raspberrypi-sys-mods `firstboot` (grow rootfs, reboot) -> flash
+  ESP32-S3, reboot -> wizard. It does not reboot in the middle of cloud-init:
+  the local/network stages (user, hostname, Wi-Fi from Imager) are
+  `Before=sysinit.target` and already done, a running `cloud-config.service`
+  is waited for, and config/final modules that did not run yet run on the next
+  boot (no per-instance semaphore). `cloud-init status --wait` must **not** be
+  used here: `cloud-final.service` is `After=multi-user.target`, which is
+  after this unit (deadlock). No ESP present (plain Pi) -> marker written,
+  boot continues.
+* **Later boots**: only a **blank or bricked ESP32-S3** (`303a:1001` /
+  `303a:0009` instead of `303a:80c3`) and a **blank KeebDeck** (STM32F042 in
+  DFU, `0483:df11`) are flashed. Nothing to flash = exits in milliseconds. A
+  running QMK keyboard cannot be forced into DFU from software, so it is never
+  reflashed automatically.
+
+After flashing the Pi reboots when every MCU came back by itself, and powers
+off (user does a clean power-on) when one was written but did not restart or
+flashing failed; a failed first boot writes no marker and retries on the next
+power-on. Progress goes to the DPI console (tty1) once the ESP hands the
+screen over, the ACT LED blinks fast during the blind phase, everything is
+logged to `/var/lib/typixdeck/provision.log`. Opt out with
 `touch /etc/typixdeck/provision.disabled`. Uses esptool >= 5 from
 `/opt/typixdeck/esptool-venv` (stub flasher + `--after watchdog-reset`, the
 only reset that works from the blank-chip 1001 state).

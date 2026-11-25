@@ -1,22 +1,45 @@
 #!/bin/bash
-# TypixDeck first-boot provisioning: flash a blank (or bricked) ESP32-S3
-# and/or a blank KeebDeck keyboard from the firmware bundled in
-# /opt/typixdeck/firmware, then power off so the user does a clean power-on.
+# TypixDeck provisioning of the MCUs from the firmware bundled in
+# /opt/typixdeck/firmware. Runs as a root oneshot before the display manager
+# (see the .service), i.e. before the first-boot wizard (piwiz) or the
+# greeter can appear.
 #
-# Runs as a root oneshot before the display manager (see the .service).
-# Exits immediately when nothing needs flashing, so normal boots are not
-# affected. Progress goes to the kernel console (tty1 = the DPI panel, which
-# becomes visible the moment the freshly flashed ESP hands the screen over)
-# and to the ACT LED (fast blink while flashing) for the blind phase before
-# that. Everything is also logged to /var/lib/typixdeck/provision.log.
+# Two modes:
 #
-# Detection is purely by USB identity, so it needs no state on the Pi:
-#   ESP32-S3  303a:80c3 = app running (nothing to do)
+#  * FIRST BOOT (no $DONE marker yet): the ESP32-S3 is always (re)flashed
+#    with the bundled image, even when it already runs some app firmware -
+#    a running app is kicked into the ROM bootloader with the magic string.
+#    Then the script makes sure no cloud-init module (Raspberry Pi
+#    Imager's customisation) is half-way through (see step 4),
+#    writes the marker and REBOOTS. The first-boot wizard (or
+#    the customised desktop) therefore only ever comes up on the boot after
+#    the firmware is in place.
+#
+#  * LATER BOOTS: only a blank / bricked ESP32-S3 and a blank keyboard (DFU)
+#    are flashed; nothing to do -> exit at once, the boot is not delayed.
+#
+# (The image's own first boot - raspberrypi-sys-mods' `init=.../firstboot`,
+# which grows the root partition and reboots - happens before systemd and
+# therefore before this script on the boot after it.)
+#
+# After flashing: if every MCU came back up by itself the Pi reboots; if one
+# was written but did not restart (it needs a cold power cycle) or flashing
+# failed, the Pi powers off instead, as before. A failed first boot writes no
+# marker, so the next power-on tries again.
+#
+# Progress goes to the kernel console (tty1 = the DPI panel, which becomes
+# visible the moment the freshly flashed ESP hands the screen over) and to the
+# ACT LED (fast blink while flashing) for the blind phase before that.
+# Everything is also logged to /var/lib/typixdeck/provision.log.
+#
+# Detection is by USB identity:
+#   ESP32-S3  303a:80c3 = app running (first boot: reflash via magic string)
 #             303a:1001 = USB-Serial-JTAG ROM: blank chip, BOOT+RESET, or a
 #                         crash-looping firmware -> flash the full image
 #             303a:0009 = USB-OTG ROM download mode (magic string) -> same
 #   keyboard  0483:df11 = STM32 DFU: blank STM32F042 enters it by itself
-#             c182:6b11 = KeebDeck QMK app running (nothing to do)
+#             c182:6b11 = KeebDeck QMK app running (cannot be forced into DFU
+#                         from software -> left alone, also on first boot)
 #
 # Verified 2026-09-11 on a TypixDeck 0720 with the flash erased: the blank
 # chip enumerates as 303a:1001, esptool 5.x + stub flashes the 3.9 MB image
@@ -28,11 +51,16 @@ FW=/opt/typixdeck/firmware
 ESPTOOL=${ESPTOOL:-/opt/typixdeck/esptool-venv/bin/esptool}
 LOGDIR=/var/lib/typixdeck
 LOG=$LOGDIR/provision.log
+DONE=$LOGDIR/firstboot-flash.done
 TTY=/dev/tty1
 LED=/sys/class/leds/ACT
+MAGIC=EGGFLY_REBOOT_TO_BOOT_MODE
 SETTLE_S=${SETTLE_S:-10}       # how long a 1001/0009 must persist without 80c3
+FIRSTBOOT_SETTLE_S=${FIRSTBOOT_SETTLE_S:-20}  # first boot: wait this long for the ESP at all
+CLOUDINIT_WAIT_S=${CLOUDINIT_WAIT_S:-300}
+REBOOT_S=${REBOOT_S:-5}
 POWEROFF_S=${POWEROFF_S:-15}
-NO_POWEROFF=${NO_POWEROFF:-0}     # =1: test run, report but do not power off
+NO_POWEROFF=${NO_POWEROFF:-0}  # =1: test run, report but do not reboot / power off
 
 mkdir -p "$LOGDIR"
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
@@ -61,27 +89,72 @@ has() { lsusb 2>/dev/null | grep -q "$1"; }
 wait_for() {                   # wait_for <usb-id> <seconds>
     local i; for i in $(seq 1 "$2"); do has "$1" && return 0; sleep 1; done; return 1
 }
+wait_any() {                   # wait_any <seconds> <usb-id>...
+    local s=$1 i id; shift
+    for i in $(seq 1 "$s"); do
+        for id in "$@"; do has "$id" && return 0; done
+        sleep 1
+    done
+    return 1
+}
 esp_port() { ls /dev/ttyACM* 2>/dev/null | head -1; }
+mark_done() { [ "$firstboot" = 1 ] && { date '+%F %T' > "$DONE"; sync; log "first-boot flash marked done"; }; true; }
 
-# ---- 1. settle: give a working ESP time to reach the app ----------------
+firstboot=0
+[ -e "$DONE" ] || firstboot=1
+
+# ---- 1. find out what is there -------------------------------------------
 esp_state=ok
-if ! wait_for 303a:80c3 "$SETTLE_S"; then
-    if has 303a:1001 || has 303a:0009; then esp_state=flash; else esp_state=absent; fi
+if [ "$firstboot" = 1 ]; then
+    # Give the ESP time to show up in whatever mode it is in.
+    if wait_any "$FIRSTBOOT_SETTLE_S" 303a:80c3 303a:1001 303a:0009; then
+        # A ROM state right after power-on can still turn into the app: settle.
+        if ! has 303a:80c3 && wait_for 303a:80c3 "$SETTLE_S"; then :; fi
+        if has 303a:80c3; then esp_state=update; else esp_state=flash; fi
+    else
+        esp_state=absent
+    fi
+else
+    if ! wait_for 303a:80c3 "$SETTLE_S"; then
+        if has 303a:1001 || has 303a:0009; then esp_state=flash; else esp_state=absent; fi
+    fi
 fi
 kbd_state=ok
 has 0483:df11 && kbd_state=flash
 
-if [ "$esp_state" != flash ] && [ "$kbd_state" != flash ]; then
-    log "nothing to provision (esp=$esp_state kbd=$kbd_state)"
+log "boot: firstboot=$firstboot esp=$esp_state kbd=$kbd_state"
+if [ "$esp_state" != flash ] && [ "$esp_state" != update ] && [ "$kbd_state" != flash ]; then
+    log "nothing to provision"
+    mark_done              # e.g. a plain Pi without the TypixDeck board
     exit 0
 fi
 
 console_open
-say "=== TypixDeck provisioning ==="
+if [ "$firstboot" = 1 ]; then
+    say "=== TypixDeck first boot: installing MCU firmware ==="
+else
+    say "=== TypixDeck provisioning ==="
+fi
 say "ESP32-S3: $esp_state   keyboard: $kbd_state"
-did=0; failed=0
+did=0; failed=0; coldboot=0
 
 # ---- 2. ESP32-S3 ---------------------------------------------------------
+if [ "$esp_state" = update ]; then
+    # App running: ask it to restart into the ROM download mode.
+    PORT=/dev/typixdeck-esp
+    [ -e "$PORT" ] || PORT=$(esp_port)
+    say "ESP32-S3: app running, switching it to download mode ..."
+    if [ -n "$PORT" ]; then printf '%s\n' "$MAGIC" > "$PORT" 2>/dev/null || true; fi
+    if wait_any 10 303a:1001 303a:0009; then
+        sleep 1
+        esp_state=flash
+    else
+        # Still running its old firmware: not worth blocking the device over.
+        say "ESP32-S3: did not enter download mode - keeping the installed firmware"
+        esp_state=ok
+    fi
+fi
+
 if [ "$esp_state" = flash ]; then
     IMG=$(ls "$FW"/esp32s3/typixdeck_esp32s3_full_*.bin 2>/dev/null | sort | tail -1)
     PORT=$(esp_port)
@@ -97,7 +170,8 @@ if [ "$esp_state" = flash ]; then
             ok=1
         else
             say "ESP32-S3: stub flash failed, retrying with the system esptool (no-stub) ..."
-            if esptool --no-stub --chip esp32s3 -p "$PORT" -b 460800 write_flash 0x0 "$IMG" >> "$LOG" 2>&1; then
+            PORT=$(esp_port)
+            if [ -n "$PORT" ] && esptool --no-stub --chip esp32s3 -p "$PORT" -b 460800 write_flash 0x0 "$IMG" >> "$LOG" 2>&1; then
                 ok=1
                 # no-stub cannot watchdog-reset; try to kick it out with the venv tool
                 [ -x "$ESPTOOL" ] && "$ESPTOOL" --chip esp32s3 -p "$PORT" --after watchdog-reset read-mac >> "$LOG" 2>&1 || true
@@ -107,7 +181,7 @@ if [ "$esp_state" = flash ]; then
         if [ "$ok" = 1 ] && wait_for 303a:80c3 25; then
             say "ESP32-S3: OK - firmware running (303a:80c3)"; did=1
         elif [ "$ok" = 1 ]; then
-            say "ESP32-S3: written, but it did not restart by itself - will run after power-off"; did=1
+            say "ESP32-S3: written, but it did not restart by itself - needs a power cycle"; did=1; coldboot=1
         else
             say "!! ESP32-S3: flash FAILED - see $LOG"; failed=1
         fi
@@ -127,7 +201,7 @@ if [ "$kbd_state" = flash ]; then
             if wait_for c182:6b11 10; then
                 say "keyboard: OK - KeebDeck running (c182:6b11)"
             else
-                say "keyboard: written (verified by dfu-util) - will run after power-off"
+                say "keyboard: written (verified by dfu-util) - needs a power cycle"; coldboot=1
             fi
             did=1
         else
@@ -137,17 +211,51 @@ if [ "$kbd_state" = flash ]; then
     fi
 fi
 
-# ---- 4. finish -----------------------------------------------------------
+# ---- 4. first boot: do not reboot in the middle of a cloud-init module -----
+# `cloud-init status --wait` would deadlock here: cloud-final.service is
+# After=multi-user.target, which is After this unit. It is not needed either:
+# cloud-init-local/-network (users, hostname, network config from Imager) are
+# Before=sysinit.target, so they are finished before this unit starts, and the
+# config/final modules that have not run yet carry no per-instance semaphore,
+# so cloud-init runs them on the next boot. Only a cloud-config.service that is
+# running right now (or about to start) is waited for.
+if [ "$firstboot" = 1 ] && [ "$failed" = 0 ] && command -v cloud-init >/dev/null; then
+    waited=0
+    while [ "$waited" -lt "$CLOUDINIT_WAIT_S" ]; do
+        st=$(systemctl show -p ActiveState --value cloud-config.service 2>/dev/null)
+        queued=$(systemctl list-jobs --no-legend cloud-config.service 2>/dev/null)
+        if [ "$st" = activating ] || { [ -n "$queued" ] && [ "$waited" -lt 90 ]; }; then
+            [ "$waited" = 0 ] && say "waiting for the first-boot setup (cloud-init) ..."
+            sleep 1; waited=$((waited + 1))
+        else
+            break
+        fi
+    done
+    log "cloud-config: state=$(systemctl show -p ActiveState --value cloud-config.service 2>/dev/null) waited=${waited}s"
+fi
+
+# ---- 5. finish -----------------------------------------------------------
 say ""
 if [ "$failed" = 1 ]; then
     say "=== provisioning FINISHED WITH ERRORS - check $LOG ==="
     say "Powering off in $((POWEROFF_S * 2)) s. Switch on again to retry."
-    sleep $((POWEROFF_S * 2))
-else
+    action=poweroff; delay=$((POWEROFF_S * 2))
+elif [ "$did" = 0 ]; then
+    # first boot, but the ESP refused to enter download mode: carry on booting
+    mark_done
+    log "nothing was flashed, continuing the boot"
+    exit 0
+elif [ "$coldboot" = 1 ]; then
+    mark_done
     say "=== provisioning complete ==="
     say "Powering off in $POWEROFF_S s. Please switch the device OFF and ON again."
-    sleep "$POWEROFF_S"
+    action=poweroff; delay=$POWEROFF_S
+else
+    mark_done
+    say "=== provisioning complete - rebooting in $REBOOT_S s ==="
+    action=reboot; delay=$REBOOT_S
 fi
-log "poweroff (did=$did failed=$failed)"
-[ "$NO_POWEROFF" = 1 ] && { say "(NO_POWEROFF=1: not powering off)"; exit "$failed"; }
-systemctl poweroff
+sleep "$delay"
+log "$action (firstboot=$firstboot did=$did failed=$failed coldboot=$coldboot)"
+[ "$NO_POWEROFF" = 1 ] && { say "(NO_POWEROFF=1: not doing $action)"; exit "$failed"; }
+systemctl "$action"
